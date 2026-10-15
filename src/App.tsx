@@ -15,6 +15,7 @@ import { SettingsView } from './components/SettingsView';
 import { AllTransactionsModal } from './components/AllTransactionsModal';
 import { TransactionReceiptModal } from './components/TransactionReceiptModal';
 import { NotificationToast, ToastData } from './components/NotificationToast';
+import { QrScannerFlow } from './components/QrScannerFlow';
 import { PhoneFrame } from './components/PhoneFrame';
 import { Transaction } from './types/wallet';
 import { Language, translations } from './i18n/translations';
@@ -38,7 +39,7 @@ export default function App() {
   // Navigation and active flows (Navbar has only: home, transfer, settings)
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [activeFlow, setActiveFlow] = useState<
-    'deposit' | 'withdraw' | 'transfer' | 'all_transactions' | null
+    'deposit' | 'withdraw' | 'transfer' | 'all_transactions' | 'qr_scanner' | null
   >(null);
   const [transferInitialMode, setTransferInitialMode] = useState<'send' | 'payment_link'>('send');
   const [transferInitialRecipient, setTransferInitialRecipient] = useState<string | undefined>(undefined);
@@ -161,6 +162,10 @@ export default function App() {
       );
     }
 
+    if (activeFlow === 'qr_scanner') {
+      return <QrScannerFlow onClose={() => setActiveFlow(null)} t={t} />;
+    }
+
     if (activeFlow === 'all_transactions') {
       return (
         <AllTransactionsModal
@@ -191,12 +196,10 @@ export default function App() {
     if (activeTab === 'settings') {
       return (
         <div className="h-full overflow-y-auto">
-          {/* Header with @cata_soto, language toggle, and eye icon */}
           <Header
             handle={initialWallet.user.handle}
-            onOpenProfile={() => setActiveTab('settings')}
-            language={language}
-            onToggleLanguage={toggleLanguage}
+            onOpenProfile={() => setActiveTab('home')}
+            onOpenQrScanner={() => setActiveFlow('qr_scanner')}
           />
           <SettingsView
             onLogout={handleResetData}
@@ -214,8 +217,7 @@ export default function App() {
         <Header
           handle={initialWallet.user.handle}
           onOpenProfile={() => setActiveTab('settings')}
-          language={language}
-          onToggleLanguage={toggleLanguage}
+          onOpenQrScanner={() => setActiveFlow('qr_scanner')}
         />
 
         <BalanceCard
@@ -223,10 +225,6 @@ export default function App() {
           isBalanceHidden={isBalanceHidden}
           onDeposit={() => setActiveFlow('deposit')}
           onWithdraw={() => setActiveFlow('withdraw')}
-          onQrCharge={() => {
-            setTransferInitialMode('payment_link');
-            setActiveFlow('transfer');
-          }}
           t={t}
         />
 

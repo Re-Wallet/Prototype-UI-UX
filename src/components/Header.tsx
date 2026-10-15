@@ -1,19 +1,16 @@
 import React from 'react';
-import { Globe } from 'lucide-react';
-import { Language } from '../i18n/translations';
+import { QrCode } from 'lucide-react';
 
 interface HeaderProps {
   handle: string;
   onOpenProfile: () => void;
-  language: Language;
-  onToggleLanguage: () => void;
+  onOpenQrScanner: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   handle,
   onOpenProfile,
-  language,
-  onToggleLanguage,
+  onOpenQrScanner,
 }) => {
   return (
     <header className="flex items-center justify-between px-5 pt-3 pb-2 text-white">
@@ -32,20 +29,15 @@ export const Header: React.FC<HeaderProps> = ({
         </span>
       </button>
 
-      {/* Right: Language Selector and Eye Toggle Button */}
-      <div className="flex items-center gap-1.5">
-        {/* Language Selector next to the eye */}
-        <button
-          onClick={onToggleLanguage}
-          className="h-8 px-2.5 rounded-full bg-white/5 hover:bg-white/10 flex items-center gap-1.5 text-xs font-semibold text-zinc-300 hover:text-white border border-white/5 active:scale-95 transition-all cursor-pointer"
-          title="Cambiar idioma / Switch language"
-          aria-label={`Current language: ${language.toUpperCase()}. Tap to toggle.`}
-        >
-          <Globe className="w-3.5 h-3.5 text-[#ff5a1f]" />
-          <span className="text-[11px] font-bold tracking-wider">{language.toUpperCase()}</span>
-        </button>
-
-      </div>
+      {/* Right: QR Code Scanner - Orange QR icon */}
+      <button
+        onClick={onOpenQrScanner}
+        className="w-8 h-8 rounded-full bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.95] flex items-center justify-center text-white shadow-lg shadow-[#ff5a1f]/30 transition-all cursor-pointer"
+        title="Escanear código QR"
+        aria-label="Escanear código QR"
+      >
+        <QrCode className="w-4.5 h-4.5" />
+      </button>
     </header>
   );
 };

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { X, Check, Copy, Share2, ArrowDownLeft, ArrowUpRight, Download, CheckCircle2 } from 'lucide-react';
 import { Transaction } from '../types/wallet';
-import { CoinIcon } from './CoinIcon';
 
 interface TransactionReceiptModalProps {
   transaction: Transaction | null;
@@ -31,6 +30,14 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
   const handleDownload = () => {
     setDownloadSuccess(true);
     setTimeout(() => setDownloadSuccess(false), 2500);
+  };
+
+  // Format: "USD +" / "USD -" / "USD" (when pending)
+  const formatAmountDisplay = () => {
+    if (!isCompleted) {
+      return 'USD';
+    }
+    return `USD ${isIncoming ? '+' : '-'}`;
   };
 
   return (
@@ -83,11 +90,10 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
           <p className="text-xs text-zinc-400 mb-3">{transaction.timestamp}</p>
 
           <div className="flex items-center justify-center gap-2 text-white font-bold text-3xl tabular-nums">
-            <span className={isIncoming ? 'text-[#26e5c8]' : 'text-white'}>
-              {isIncoming ? '+' : '-'}
+            <span className="text-[13px] font-semibold text-zinc-500 uppercase tracking-wider">
+              {formatAmountDisplay()}
             </span>
-            <CoinIcon className="w-6 h-6 text-zinc-300" />
-            <span>{transaction.amount.toFixed(2)} USDC</span>
+            <span>{transaction.amount.toFixed(2)}</span>
           </div>
         </div>
 

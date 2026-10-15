@@ -1,6 +1,5 @@
 import React from 'react';
-import { ArrowDown, ArrowUp, QrCode } from 'lucide-react';
-import { CoinIcon } from './CoinIcon';
+import { ArrowDown, ArrowUp } from 'lucide-react';
 import { Translations } from '../i18n/translations';
 
 interface BalanceCardProps {
@@ -8,7 +7,6 @@ interface BalanceCardProps {
   isBalanceHidden: boolean;
   onDeposit: () => void;
   onWithdraw: () => void;
-  onQrCharge: () => void;
   t: Translations;
 }
 
@@ -17,7 +15,6 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
   isBalanceHidden,
   onDeposit,
   onWithdraw,
-  onQrCharge,
   t,
 }) => {
   // Format split into integer and decimal parts
@@ -31,9 +28,11 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
         {t.yourBalance}
       </span>
 
-      {/* Main Balance Display */}
+      {/* Main Balance Display - USD instead of coin icon */}
       <div className="flex items-baseline gap-2.5 mb-6">
-        <CoinIcon className="w-8 h-8 text-zinc-300 self-center" />
+        <span className="text-[13px] font-semibold text-zinc-500 uppercase tracking-wider self-center">
+          USD
+        </span>
         {isBalanceHidden ? (
           <span className="text-4xl font-bold tracking-widest text-zinc-300 select-none">
             ••••••
@@ -50,28 +49,18 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
         )}
       </div>
 
-      {/* Action Row: Deposit + Circular Orange QR Button + Withdraw */}
+      {/* Action Row: Deposit (Orange) + Withdraw */}
       <div className="flex items-center gap-2.5">
-        {/* Deposit Button */}
+        {/* Deposit Button - ORANGE with ArrowDown */}
         <button
           onClick={onDeposit}
-          className="flex-1 h-[52px] rounded-2xl bg-[#201a16] hover:bg-[#2a221d] active:scale-[0.98] text-[#f5eee9] border border-[#3b2b22] font-semibold text-[15px] flex items-center justify-center gap-2 transition-all cursor-pointer"
+          className="flex-1 h-[52px] rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white border border-[#ff5a1f]/30 font-semibold text-[15px] flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-[#ff5a1f]/20"
         >
           <ArrowDown className="w-4 h-4 stroke-[2.5]" />
           <span>{t.deposit}</span>
         </button>
 
-        {/* Circular Orange Button for QR Cobro */}
-        <button
-          onClick={onQrCharge}
-          className="w-[52px] h-[52px] rounded-full bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.95] text-white flex items-center justify-center shadow-lg shadow-[#ff5a1f]/30 transition-all shrink-0 cursor-pointer"
-          title={t.qrChargeTooltip}
-          aria-label={t.qrChargeTooltip}
-        >
-          <QrCode className="w-5 h-5 stroke-[2.2]" />
-        </button>
-
-        {/* Withdraw / Retiro Button */}
+        {/* Withdraw / Retiro Button - with ArrowUp */}
         <button
           onClick={onWithdraw}
           className="flex-1 h-[52px] rounded-2xl bg-[#201a16] hover:bg-[#2a221d] active:scale-[0.98] text-[#f5eee9] border border-[#3b2b22] font-semibold text-[15px] flex items-center justify-center gap-2 transition-all cursor-pointer"

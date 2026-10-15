@@ -36,6 +36,16 @@ export interface Translations {
   // Keypad
   balanceLabel: string;
   continue: string;
+  back: string;
+  qrScannerTitle: string;
+  qrScannerHint: string;
+  qrScannerActivate: string;
+  qrScannerDetected: string;
+  qrScannerConfirm: string;
+  qrScannerRescan: string;
+  qrScannerDenied: string;
+  qrScannerUnsupported: string;
+  qrScannerPrivacy: string;
   insufficientBalance: string;
 
   // Withdraw Flow
@@ -156,6 +166,16 @@ export const translations: Record<Language, Translations> = {
 
     balanceLabel: 'Balance:',
     continue: 'Continuar',
+    back: 'Atras',
+    qrScannerTitle: 'Escanear QR',
+    qrScannerHint: 'Escanea un código QR de pago',
+    qrScannerActivate: 'Activar cámara',
+    qrScannerDetected: 'QR detectado',
+    qrScannerConfirm: 'Confirmar',
+    qrScannerRescan: 'Escanear otro',
+    qrScannerDenied: 'Acceso a la cámara denegado',
+    qrScannerUnsupported: 'Cámara no disponible',
+    qrScannerPrivacy: 'El escaneo es local: la imagen nunca sale de tu dispositivo.',
     insufficientBalance: 'Saldo Insuficiente',
 
     withdrawTitle: 'Retiro',
@@ -270,6 +290,16 @@ export const translations: Record<Language, Translations> = {
 
     balanceLabel: 'Balance:',
     continue: 'Continue',
+    back: 'Back',
+    qrScannerTitle: 'Scan QR',
+    qrScannerHint: 'Scan a payment QR code',
+    qrScannerActivate: 'Activate camera',
+    qrScannerDetected: 'QR detected',
+    qrScannerConfirm: 'Confirm',
+    qrScannerRescan: 'Scan another',
+    qrScannerDenied: 'Camera access denied',
+    qrScannerUnsupported: 'Camera unavailable',
+    qrScannerPrivacy: 'Scanning is local: the image never leaves your device.',
     insufficientBalance: 'Insufficient Balance',
 
     withdrawTitle: 'Withdraw',

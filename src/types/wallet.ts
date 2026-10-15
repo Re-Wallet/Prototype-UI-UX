@@ -26,6 +26,8 @@ export interface Contact {
   avatarBg: string;
   avatarEmoji?: string;
   recent?: boolean;
+  address?: string; // Solana public key for transfers
+  isVerified?: boolean;
 }
 
 export interface CurrencyConfig {

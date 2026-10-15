@@ -6,3 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local prototype database (SQLite)
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Generated Drizzle snapshots are committed; journal is not needed locally
+src/db/migrations/meta/_journal.json.bak
