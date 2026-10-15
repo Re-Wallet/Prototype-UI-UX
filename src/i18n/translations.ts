@@ -126,19 +126,19 @@ export interface Translations {
 
 export const translations: Record<Language, Translations> = {
   es: {
-    navHome: 'Home',
-    navTransfer: 'Transfer',
-    navSettings: 'Settings',
+    navHome: 'Inicio',
+    navTransfer: 'Transferir',
+    navSettings: 'Ajustes',
 
     yourBalance: 'Saldo actual',
     hideBalance: 'Ocultar saldo',
     showBalance: 'Mostrar saldo',
-    deposit: 'Deposit',
-    withdraw: 'Retiro',
+    deposit: 'Ingresar',
+    withdraw: 'Retirar',
     qrChargeTooltip: 'Cobrar por QR / Payment Link',
 
-    recents: 'Recents',
-    seeAll: 'See All',
+    recents: 'Reciente',
+    seeAll: 'Ver todo',
     noTransactions: 'No hay transacciones recientes',
     createdInProgress: 'Created · In progress',
     sentCompleted: 'Sent · Completed',
