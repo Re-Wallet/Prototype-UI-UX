@@ -215,8 +215,6 @@ export default function App() {
       <div className="h-full overflow-y-auto select-none">
         <Header
           handle={INITIAL_USER.handle}
-          isBalanceHidden={isBalanceHidden}
-          onToggleBalance={() => setIsBalanceHidden(!isBalanceHidden)}
           onOpenProfile={() => setActiveTab('settings')}
           language={language}
           onToggleLanguage={toggleLanguage}

@@ -1,25 +1,19 @@
 import React from 'react';
-import { Eye, EyeOff, Globe } from 'lucide-react';
-import { Language, Translations } from '../i18n/translations';
+import { Globe } from 'lucide-react';
+import { Language } from '../i18n/translations';
 
 interface HeaderProps {
   handle: string;
-  isBalanceHidden: boolean;
-  onToggleBalance: () => void;
   onOpenProfile: () => void;
   language: Language;
   onToggleLanguage: () => void;
-  t: Translations;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   handle,
-  isBalanceHidden,
-  onToggleBalance,
   onOpenProfile,
   language,
   onToggleLanguage,
-  t,
 }) => {
   return (
     <header className="flex items-center justify-between px-5 pt-3 pb-2 text-white">
@@ -51,19 +45,6 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="text-[11px] font-bold tracking-wider">{language.toUpperCase()}</span>
         </button>
 
-        {/* Eye Toggle Button */}
-        <button
-          onClick={onToggleBalance}
-          className="w-8 h-8 flex items-center justify-center text-zinc-400 hover:text-white transition-colors rounded-full hover:bg-white/5 active:scale-95 cursor-pointer"
-          aria-label={isBalanceHidden ? t.showBalance : t.hideBalance}
-          title={isBalanceHidden ? t.showBalance : t.hideBalance}
-        >
-          {isBalanceHidden ? (
-            <EyeOff className="w-4.5 h-4.5 text-zinc-500" />
-          ) : (
-            <Eye className="w-4.5 h-4.5" />
-          )}
-        </button>
       </div>
     </header>
   );
