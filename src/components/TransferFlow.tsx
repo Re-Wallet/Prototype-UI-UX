@@ -574,16 +574,16 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             className="flex items-center gap-1 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-[15px] font-semibold py-2 rounded-lg cursor-pointer"
           >
             <ArrowLeft className="w-5 h-5 stroke-[2.5]" />
-            <span>Back</span>
+            <span>Atras</span>
           </button>
-          <h1 className="text-[17px] font-semibold text-white tracking-tight">Send</h1>
+          <h1 className="text-[17px] font-semibold text-white tracking-tight">Enviar</h1>
           <div className="w-12" />
         </div>
 
         {/* Section: To */}
         <div className="mb-4">
           <label className="text-[14px] font-semibold text-zinc-300 block mb-2">
-            To
+            Para
           </label>
           {/* Search by username input: white rounded pill as in screenshot */}
           <div className="w-full h-12 rounded-2xl bg-white flex items-center px-4 shadow-sm">
@@ -610,7 +610,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
         {/* Section: Recent (in teal/cyan like screenshot) */}
         <div className="mb-4">
           <h2 className="text-[13px] font-semibold text-[#26e5c8] mb-2">
-            Recent
+            Recien
           </h2>
 
           {/* Contact rows: same clean style as Recents rows */}
@@ -640,7 +640,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
         {/* Section: Or (in teal/cyan like screenshot) */}
         <div className="mb-3 mt-4">
           <h2 className="text-[13px] font-semibold text-[#26e5c8] mb-2.5">
-            Or
+            O
           </h2>
 
           {/* Generate a payment link card matching screenshot */}
@@ -654,7 +654,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                 <LinkIcon className="w-5 h-5 stroke-[2.2]" />
               </div>
               <h3 className="text-[15px] font-semibold text-white leading-snug">
-                Generate a payment link
+                Generar link de pago
               </h3>
             </div>
             <ArrowRight className="w-5 h-5 text-[#26e5c8] group-hover:translate-x-1 transition-transform" />

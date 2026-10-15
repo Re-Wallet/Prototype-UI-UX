@@ -44,7 +44,7 @@ export const AllTransactionsModal: React.FC<AllTransactionsModalProps> = ({
           <ArrowLeft className="w-5 h-5" />
           <span>Volver</span>
         </button>
-        <h1 className="text-[17px] font-semibold text-white tracking-tight">Historial de Transacciones</h1>
+        <h1 className="text-[17px] font-semibold text-white tracking-tight">Historial</h1>
         <div className="w-12" />
       </div>
 

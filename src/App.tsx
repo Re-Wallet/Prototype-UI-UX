@@ -16,23 +16,24 @@ import { AllTransactionsModal } from './components/AllTransactionsModal';
 import { TransactionReceiptModal } from './components/TransactionReceiptModal';
 import { NotificationToast, ToastData } from './components/NotificationToast';
 import { PhoneFrame } from './components/PhoneFrame';
-import { INITIAL_USER, INITIAL_TRANSACTIONS } from './data/mockData';
 import { Transaction } from './types/wallet';
 import { Language, translations } from './i18n/translations';
+import { getInitialWalletSnapshot } from './services/walletRepository';
 
 export default function App() {
-  // Language state (default Spanish, with English toggle)
-  const [language, setLanguage] = useState<Language>('es');
+  // English is the product default; Spanish remains available from settings.
+  const [language, setLanguage] = useState<Language>('en');
   const t = translations[language];
+  const initialWallet = getInitialWalletSnapshot();
 
   const toggleLanguage = () => {
     setLanguage((prev) => (prev === 'es' ? 'en' : 'es'));
   };
 
   // Wallet core state initialized to match the user's provided screenshots
-  const [balance, setBalance] = useState<number>(423.25);
+  const [balance, setBalance] = useState<number>(initialWallet.balance);
   const [isBalanceHidden, setIsBalanceHidden] = useState<boolean>(false);
-  const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
+  const [transactions, setTransactions] = useState<Transaction[]>(initialWallet.transactions);
 
   // Navigation and active flows (Navbar has only: home, transfer, settings)
   const [activeTab, setActiveTab] = useState<NavTab>('home');
@@ -105,8 +106,8 @@ export default function App() {
   };
 
   const handleResetData = () => {
-    setBalance(423.25);
-    setTransactions(INITIAL_TRANSACTIONS);
+    setBalance(initialWallet.balance);
+    setTransactions([...initialWallet.transactions]);
     setIsBalanceHidden(false);
     showToast('Sesión Reiniciada', 'Se reestableció el saldo a Ⓢ 423.25.');
   };
@@ -192,7 +193,7 @@ export default function App() {
         <div className="h-full overflow-y-auto">
           {/* Header with @cata_soto, language toggle, and eye icon */}
           <Header
-            handle={INITIAL_USER.handle}
+            handle={initialWallet.user.handle}
             onOpenProfile={() => setActiveTab('settings')}
             language={language}
             onToggleLanguage={toggleLanguage}
@@ -211,7 +212,7 @@ export default function App() {
     return (
       <div className="h-full overflow-y-auto select-none">
         <Header
-          handle={INITIAL_USER.handle}
+          handle={initialWallet.user.handle}
           onOpenProfile={() => setActiveTab('settings')}
           language={language}
           onToggleLanguage={toggleLanguage}
