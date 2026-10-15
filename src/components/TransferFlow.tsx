@@ -66,6 +66,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [isSimulatingPayment, setIsSimulatingPayment] = useState<boolean>(false);
   const [simulatedPaymentSuccess, setSimulatedPaymentSuccess] = useState<boolean>(false);
+  const [linkDetailsConfirmed, setLinkDetailsConfirmed] = useState<boolean>(false);
 
   const sendAmount = parseFloat(sendAmountStr) || 0;
   const isSendOverBalance = sendAmount > balance;
@@ -341,7 +342,10 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
         <div>
           <div className="flex items-center justify-between min-h-[44px] mb-2">
             <button
-              onClick={() => setSubflow('link_amount')}
+              onClick={() => {
+                setLinkDetailsConfirmed(false);
+                setSubflow('link_amount');
+              }}
               className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -388,8 +392,10 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               />
             </div>
 
-            {/* Visual QR Card - Displayed immediately after inputs */}
-            <div className="pt-2">
+            {linkDetailsConfirmed ? (
+              <>
+                {/* Visual QR Card - Displayed after confirming details */}
+                <div className="pt-2">
               <div className="p-4 rounded-3xl bg-white text-black max-w-[240px] mx-auto my-2 shadow-xl flex flex-col items-center">
                 <div className="w-full flex items-center justify-between pb-2 border-b border-zinc-200 text-xs">
                   <span className="font-bold tracking-tight text-zinc-900">{INITIAL_USER.handle}</span>
@@ -471,8 +477,8 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               </button>
             </div>
 
-            {simulatedPaymentSuccess && (
-              <div className="my-4 p-5 rounded-2xl bg-[#10b981]/15 border border-[#10b981]/40 text-center animate-in fade-in zoom-in-95 duration-300">
+                {simulatedPaymentSuccess && (
+                  <div className="my-4 p-5 rounded-2xl bg-[#10b981]/15 border border-[#10b981]/40 text-center animate-in fade-in zoom-in-95 duration-300">
                 <div className="w-12 h-12 rounded-full bg-[#10b981] text-black flex items-center justify-center mx-auto mb-3">
                   <CheckCircle2 className="w-7 h-7 stroke-[2.5]" />
                 </div>
@@ -484,6 +490,16 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                   +Ⓢ {linkAmount.toFixed(2)} sumados a tu saldo
                 </span>
               </div>
+                )}
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setLinkDetailsConfirmed(true)}
+                className="w-full h-12 rounded-2xl bg-[#26e5c8] hover:bg-[#56f0d9] text-[#070709] font-semibold text-sm transition-colors cursor-pointer"
+              >
+                Confirmar concepto y cliente
+              </button>
             )}
           </div>
         </div>
@@ -492,7 +508,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
         <div className="pt-4 pb-2">
           <button
             onClick={onClose}
-            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer transition-all"
+            className="w-full h-13 rounded-2xl bg-zinc-700 hover:bg-zinc-600 active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-black/20 cursor-pointer transition-all"
           >
             <span>Ir a Inicio</span>
           </button>
