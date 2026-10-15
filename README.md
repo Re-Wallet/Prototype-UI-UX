@@ -1,12 +1,13 @@
 # ReWallet — Prototype UI
 
 Mobile-first wallet prototype for ReWallet: receive, send, charge, and pay with
-USDC. Built with React + TypeScript + Tailwind CSS v4, backed by a local SQLite
-database via Drizzle ORM and a thin Express API.
+USDC on **Solana devnet**. Built with React + TypeScript + Tailwind CSS v4,
+backed by a local SQLite database via Drizzle ORM and a thin Express API.
 
-> **Prototype scope.** Everything runs against **Solana devnet** and a local
-> SQLite file. No real funds, no private keys, no on-chain writes yet. Balances
-> are simulated by the local ledger so the full UI can be exercised end to end.
+> **Current state (2026-10-15):** Solana Pay is **fully wired** — the UI uses real
+> devnet RPC calls via `@solana/kit` adapters. Payment requests, QR codes,
+> QR scanning, balance reads, payment verification, and recipient validation
+> all hit the chain. Local ledger remains as fallback for offline/demo mode.
 
 ## Quick start
 
@@ -24,8 +25,8 @@ npm run dev              # terminal 2
 
 Open **http://localhost:3000**.
 
-Demo user: `@cata_soto` — balance USD 423.25, 5 transactions, 4 contacts,
-2 payment links, 2 QR scans, 3 notifications.
+Demo user: `@cata_soto` — balance USD 423.25 (local ledger), 5 transactions,
+4 contacts with Solana addresses, 2 payment links, 2 QR scans, 3 notifications.
 
 ## Architecture
 
@@ -47,45 +48,116 @@ Demo user: `@cata_soto` — balance USD 423.25, 5 transactions, 4 contacts,
 │  Drizzle ORM + SQLite              src/db/{schema,index}.ts  │
 │  data/rewallet.db (git-ignored)                              │
 └──────────────────────────────────────────────────────────────┘
+                            ▲
+                            │  src/adapters/index.ts (barrel)
+┌───────────────────────────┴──────────────────────────────────┐
+│  Solana Adapters (devnet/mock)       src/adapters/*          │
+│  solana-client · solana-pay · token · payment-verify         │
+└──────────────────────────────────────────────────────────────┘
+                            │  @solana/kit + devnet RPC
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Solana devnet (api.devnet.solana.com)                       │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-The UI never talks to Drizzle directly. Screens consume the domain types in
-`src/types/wallet.ts`; the repository bridges to the API and falls back to
-`src/data/mockData.ts` when the API is offline, so the prototype always renders.
+**Key principle:** UI never talks to Drizzle or `@solana/*` directly. Screens
+consume domain types in `src/types/wallet.ts` and `src/contracts/payments.ts`;
+the repository bridges to the API; the adapter barrel (`src/adapters/index.ts`)
+is the **single entry point** for all chain access, with a `mock`/`devnet`
+mode switch via `VITE_USE_CHAIN`.
+
+## Solana Pay Integration (Working End-to-End)
+
+| Feature | Component | Adapter | Status |
+|---------|-----------|---------|--------|
+| **Generate payment request** | `TransferFlow` | `chain.createPaymentRequest()` | ✅ Real `solana:` URL + QR SVG |
+| **QR code rendering** | `TransferFlow` | `chain.renderQrSvg()` / `renderQrDataUrl()` | ✅ Real QR codes |
+| **QR scanning** | `QrScannerFlow` | `chain.parsePaymentRequest()` + Barcode Detection API | ✅ Camera → parsed transfer/tx request |
+| **Payment verification** | `TransferFlow` | `chain.verifyPayment(ref, asset, recipient)` | ✅ Reference → receipt on-chain |
+| **Recipient validation** | `TransferFlow` | `chain.verifyRecipient(addr, asset)` | ✅ Blocks token-account/mint/program |
+| **Balance reading** | `BalanceCard` | `chain.getBalances(wallet, [USDC, SOL])` | ✅ Real devnet balances |
+| **Reference generation** | `TransferFlow` | `chain.generateReference()` | ✅ 32-byte base58 per payment |
+
+### Flow: Create → Scan → Pay → Verify
+
+1. **Merchant** opens TransferFlow → "Generar link de pago" → enters amount/concept/client → "Generar"
+   - Creates unique `reference` via `generateReference()`
+   - Builds `solana:<merchant>?amount=X&spl-token=USDC_MINT&reference=REF&label=ReWallet&message=concept&memo=client` via `createPaymentRequest()`
+   - Renders QR SVG via `renderQrSvg()`
+   - Shows "Copiar Link" / "WhatsApp" share buttons
+
+2. **Payer** opens QrScannerFlow → "Activar cámara" → points at QR
+   - Barcode Detection API (Chrome/Edge) reads QR continuously
+   - `parsePaymentRequest()` validates Solana Pay spec
+   - Shows parsed: recipient, amount, asset, message, references
+   - "Confirmar" acknowledges scan
+
+3. **Payer** opens QR in Phantom (devnet) → approves → transaction lands on devnet
+
+4. **Merchant** taps "Verificar pago en devnet"
+   - `verifyPayment({ reference }, usdcDevnet, merchantWallet)` queries `getSignaturesForAddress(reference)`
+   - Inspects transaction via `getTransaction` → confirms USDC credit to merchant's ATA
+   - Returns `PaymentReceipt` with signature, slot, commitment, amount
+   - UI adds `received` transaction to list
 
 ## Project layout
 
 ```
 src/
-├── components/          # UI screens and flows
-├── data/mockData.ts     # offline fallback snapshot
+├── adapters/                    # Solana chain access (single entry point)
+│   ├── index.ts                 # Barrel export + mode switch (mock/devnet)
+│   ├── solana-client.ts         # RPC client singleton + cluster config
+│   ├── solana-pay.ts            # Solana Pay spec: encode/parse/QR/refs
+│   ├── token.ts                 # ATA derivation, balances, recipient check
+│   └── payment-verify.ts        # Verification, reference lookup, streaming
+├── components/                  # UI screens and flows
+│   ├── TransferFlow.tsx         # Send + Payment Link + Verify (real chain)
+│   ├── QrScannerFlow.tsx        # Camera + Barcode Detection + parse
+│   ├── BalanceCard.tsx          # USD balance + SOL/USDC devnet badges
+│   ├── DepositFlow.tsx          # Deposit methods (mock)
+│   ├── WithdrawFlow.tsx         # Withdraw methods (mock)
+│   ├── Header.tsx
+│   ├── BottomNav.tsx
+│   ├── Keypad.tsx
+│   ├── CoinIcon.tsx
+│   ├── RecentTransactions.tsx
+│   ├── AllTransactionsModal.tsx
+│   ├── TransactionReceiptModal.tsx
+│   ├── NotificationToast.tsx
+│   ├── PhoneFrame.tsx
+│   └── SettingsView.tsx
+├── contracts/                   # Pure types, zero SDK imports
+│   ├── payments.ts              # PaymentIntent, Receipt, Reference, errors
+│   ├── tokens.ts                # TokenAsset, mint registry, conversions
+│   └── identity.ts              # Handle resolution types
+├── data/mockData.ts             # Offline fallback snapshot
 ├── db/
-│   ├── schema.ts        # Drizzle schema (9 tables)
-│   ├── index.ts         # SQLite connection + pragmas
-│   ├── seed.ts          # devnet demo data
-│   └── migrations/      # generated SQL migrations (committed)
-├── i18n/translations.ts # EN / ES strings
-├── lib/devnet.ts        # cluster config, explorer URLs, USDC helpers
+│   ├── schema.ts                # Drizzle schema (9 tables)
+│   ├── index.ts                 # SQLite connection + pragmas
+│   ├── seed.ts                  # Devnet demo data (idempotent)
+│   └── migrations/              # Generated SQL migrations (committed)
+├── i18n/translations.ts         # EN / ES strings
 ├── services/
-│   ├── wallet.ts        # business logic + DB ↔ UI mappers
-│   └── walletRepository.ts  # UI-facing repository (API or mock)
-├── types/wallet.ts      # domain contracts
-└── App.tsx              # navigation and screen orchestration
-server.ts                # Express API over the service layer
-drizzle.config.ts        # Drizzle Kit config (SQLite dialect)
+│   ├── wallet.ts                # Business logic + DB ↔ UI mappers
+│   └── walletRepository.ts      # UI-facing repository (API or mock)
+├── types/wallet.ts              # UI domain types (Transaction, Contact, etc.)
+└── App.tsx                      # Navigation + screen orchestration
+server.ts                        # Express API over the service layer
+drizzle.config.ts                # Drizzle Kit config (SQLite dialect)
 ```
 
 ## Database
 
-SQLite through Drizzle ORM. The schema mirrors a production MariaDB model with
+SQLite through Drizzle ORM. Schema mirrors a production MariaDB model with
 SQLite-compatible types (REAL for decimals, INTEGER epoch for timestamps, TEXT
 for enums and JSON).
 
 | Table | Purpose |
 |-------|---------|
 | `users` | Wallets, balances, handle, KYC status |
-| `contacts` | Per-user address book |
-| `transactions` | deposit / withdrawal / sent / received |
+| `contacts` | Per-user address book (includes `publicKey` for Solana) |
+| `transactions` | deposit / withdrawal / sent / received + Solana traceability |
 | `payment_links` | Charge links with Solana Pay reference |
 | `qr_scans` | Scanned QR tracking |
 | `user_settings` | Language, currency, security (1:1 with users) |
@@ -105,8 +177,6 @@ for enums and JSON).
 | `npm run db:reset` | Drop `data/`, re-push schema, re-seed |
 
 ### Migrating to MariaDB
-
-The schema is written so the move is mechanical:
 
 | SQLite (prototype) | MariaDB (production) |
 |--------------------|----------------------|
@@ -134,19 +204,38 @@ Change the driver in `src/db/index.ts` and the `dialect` in
 
 ## Environment
 
-Copy `.env.example` to `.env.local`:
+Create `.env.local` (copy from below, **do not commit**):
 
 ```env
+# Solana devnet configuration
 VITE_SOLANA_CLUSTER=devnet
 VITE_SOLANA_RPC=https://api.devnet.solana.com
 VITE_SOLANA_RPC_WS=wss://api.devnet.solana.com
+
+# Enable devnet mode (real chain reads via @solana/kit)
+VITE_USE_CHAIN=true
+
+# Merchant wallet for payment requests (devnet address that receives)
 VITE_MERCHANT_WALLET=7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU
 
-VITE_USE_API=false            # true → read from server.ts instead of mock data
+# API configuration
+VITE_USE_API=true            # true → read from server.ts (real DB data)
 VITE_API_BASE=http://localhost:3001
 API_PORT=3001
 DATABASE_URL=file:./data/rewallet.db
+
+# AI (optional)
+GEMINI_API_KEY=
+APP_URL=http://localhost:3000
 ```
+
+### Mode matrix
+
+| `VITE_USE_CHAIN` | `VITE_USE_API` | Behavior |
+|------------------|----------------|----------|
+| `false` (default) | `false` | **Full mock** — no network, all data from `mockData.ts` |
+| `true` | `false` | **Chain reads only** — real devnet balances/verify, UI data from mock |
+| `true` | `true` | **Full devnet** — chain reads + real DB data via API (default now) |
 
 ## Scripts
 
@@ -154,16 +243,83 @@ DATABASE_URL=file:./data/rewallet.db
 |--------|-------------|
 | `npm run dev` | Vite dev server (port 3000) |
 | `npm run api` | Express API with watch (port 3001) |
-| `npm run build` | Production build |
+| `npm run api:start` | Express API once (no watch) |
+| `npm run build` | Production build (`dist/`) |
+| `npm run preview` | Preview production build |
 | `npm run lint` | TypeScript check (`tsc --noEmit`) |
+| `npm run clean` | Remove `dist/` and `server.js` |
 
-## Roadmap
+## Key implementation details
 
-1. **Solana Pay wiring** — replace simulated signing with `@solana/pay` transfer
-   requests, `watchReference` for payment confirmation, and a backend
-   transaction-request endpoint for withdrawals.
-2. **Real balance source** — derive balances from the chain (Helius/QuickNode
-   webhooks) instead of the local ledger column.
-3. **Handle resolution** — indexer-backed `@handle → address` lookup.
-4. **MariaDB** — swap the Drizzle driver and run the production schema.
-5. **Auth** — wallet signature login (Sign-In With Solana) and session handling.
+### Adapter barrel (`src/adapters/index.ts`)
+
+```typescript
+// Single entry point — UI imports ONLY from here
+import { chain } from '@/adapters';
+
+// Mode switch
+chain.isLive()        // true when VITE_USE_CHAIN=true
+chain.mode()          // 'mock' | 'devnet'
+chain.network()       // { cluster, rpcUrl, rpcSubscriptionsUrl }
+
+// Payment requests (always real — pure encoding)
+chain.createPaymentRequest({ recipient, amount, asset, reference, label, message, memo })
+chain.generateReference()
+chain.parsePaymentRequest(rawUrl)
+chain.renderQrSvg(url)
+chain.renderQrDataUrl(url)
+
+// Balances (mock returns deterministic fake; devnet hits RPC)
+await chain.getBalance(owner, asset)
+await chain.getBalances(owner, [usdcDevnet, solAsset])
+
+// Accounts
+await chain.deriveAta(owner, asset)
+await chain.verifyRecipient(recipient, asset)   // { ok, classified, canReceive, reason }
+await chain.classifyAddress(addr)
+
+// Verification
+await chain.verifyPayment({ reference }, asset, recipient)
+await chain.findReferenceTransactions(reference)
+chain.watchTokenAccount(owner, asset, onEvent, options)
+
+// Commitment helpers
+chain.meetsCommitment(observed, required)
+chain.createInMemoryLedger()   // Prevents double-count in session
+```
+
+### Supported assets (devnet)
+
+Only **USDC** is available on devnet (Circle's `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`).
+USDT, PYUSD, USDG are mainnet-only — registry in `src/contracts/tokens.ts`.
+
+### Token program awareness
+
+The adapter derives ATAs with the **correct token program** per mint:
+- `spl-token` (Tokenkeg...) → USDC, USDT
+- `token-2022` (TokenzQdB...) → PYUSD, USDG
+
+Using the wrong program produces a different, unusable address.
+
+### Verification strategy (per Solana docs)
+
+1. `getSignaturesForAddress(reference)` — finds txs mentioning the reference
+2. `getTransaction(sig, { encoding: 'jsonParsed' })` — inspects pre/post token balances
+3. Computes `delta` on merchant's ATA → confirms credit
+4. Checks `confirmationStatus` ≥ `confirmed` (default) or `finalized`
+5. Validates `mint` matches expected asset (prevents fake "USDC")
+6. Returns `PaymentReceipt` with signature, slot, commitment, amount, memo
+
+## Roadmap (remaining)
+
+1. **Real signing** — integrate Privy/Phantom wallet adapter for actual transaction signing (currently payer scans QR in external wallet)
+2. **Transaction requests** — backend `/api/solana-pay/tx` endpoint for withdrawals (Solana Pay transaction request flow)
+3. **Handle resolution** — indexer-backed `@handle → address` lookup
+4. **MariaDB** — swap Drizzle driver and run production schema
+5. **Auth** — wallet signature login (Sign-In With Solana) + session handling
+6. **Webhooks** — Helius/QuickNode webhooks for real-time balance updates instead of polling
+7. **Fee abstraction** — sponsor priority fees so users never need SOL
+
+## License
+
+Apache-2.0

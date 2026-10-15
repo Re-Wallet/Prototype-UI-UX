@@ -15,3 +15,5 @@ data/
 
 # Generated Drizzle snapshots are committed; journal is not needed locally
 src/db/migrations/meta/_journal.json.bak
+# Local Pi runtime state
+.atl/

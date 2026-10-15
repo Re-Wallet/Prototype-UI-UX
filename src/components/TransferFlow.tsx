@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -11,11 +11,13 @@ import {
   Check,
   Share2,
   Sparkles,
+  AlertCircle,
 } from 'lucide-react';
 import { Keypad } from './Keypad';
 import { CoinIcon } from './CoinIcon';
 import { Contact, Transaction } from '../types/wallet';
 import { INITIAL_CONTACTS, INITIAL_USER } from '../data/mockData';
+import { chain, type TokenAsset, type Address, type Reference } from '../adapters';
 
 interface TransferFlowProps {
   balance: number;
@@ -67,6 +69,9 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   const [isSimulatingPayment, setIsSimulatingPayment] = useState<boolean>(false);
   const [simulatedPaymentSuccess, setSimulatedPaymentSuccess] = useState<boolean>(false);
   const [qrGenerated, setQrGenerated] = useState<boolean>(false);
+  const [paymentRequest, setPaymentRequest] = useState<{ url: string; qrSvg: string; qrDataUrl: string; reference: Reference } | null>(null);
+  const [generatingQR, setGeneratingQR] = useState<boolean>(false);
+  const [qrError, setQrError] = useState<string | null>(null);
 
   const sendAmount = parseFloat(sendAmountStr) || 0;
   const isSendOverBalance = sendAmount > balance;
@@ -76,15 +81,42 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
     linkAmount > 0 ? `${linkAmount}usdc` : 'open'
   }`;
 
+  // USDC devnet asset for payment requests
+  const usdcDevnet: TokenAsset = {
+    symbol: 'USDC',
+    mint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as any,
+    program: 'spl-token',
+    decimals: 6,
+  };
+
+  // Merchant wallet from env (the wallet that receives payments)
+  const merchantWallet = ((import.meta.env.VITE_MERCHANT_WALLET as string) ||
+    '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU') as Address;
+
   const filteredContacts = INITIAL_CONTACTS.filter(
     (c) =>
       c.handle.toLowerCase().includes(searchQuery.toLowerCase()) ||
       c.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleSelectContact = (contact: Contact) => {
+  const handleSelectContact = async (contact: Contact) => {
     setRecipient(contact.handle);
     setRecipientName(contact.name);
+    setRecipientValidation(null);
+    
+    // Validate recipient address if available
+    if (contact.address && chain.isLive()) {
+      try {
+        const result = await chain.verifyRecipient(contact.address as any, usdcDevnet);
+        setRecipientValidation({ ok: result.ok, reason: result.reason || undefined });
+        if (!result.ok) {
+          // Still allow navigation but show warning
+          console.warn('Recipient validation failed:', result.reason);
+        }
+      } catch (error) {
+        console.error('Recipient validation error:', error);
+      }
+    }
     setSubflow('amount');
   };
 
@@ -121,9 +153,11 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   };
 
   const handleCopyLink = () => {
-    setCopiedLink(true);
-    navigator.clipboard?.writeText(paymentLinkUrl);
-    setTimeout(() => setCopiedLink(false), 2000);
+    if (paymentRequest) {
+      setCopiedLink(true);
+      navigator.clipboard?.writeText(paymentRequest.url);
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
   };
 
   const handleShareWhatsApp = () => {
@@ -161,8 +195,73 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
     }, 2000);
   };
 
-  const handleGenerateQR = () => {
-    setQrGenerated(true);
+  const handleGenerateQR = async () => {
+    setGeneratingQR(true);
+    setQrError(null);
+    try {
+      const reference = chain.generateReference();
+      const amount = linkAmount > 0
+        ? { base: BigInt(Math.round(linkAmount * 1_000_000)), decimals: 6, ui: linkAmount }
+        : null;
+      const result = await chain.createPaymentRequest({
+        recipient: merchantWallet,
+        amount,
+        asset: linkAmount > 0 ? usdcDevnet : null,
+        reference,
+        label: 'ReWallet',
+        message: concept,
+        memo: clientPayerName,
+      });
+      setPaymentRequest({ ...result, reference });
+      setQrGenerated(true);
+    } catch (error) {
+      setQrError((error as Error).message);
+    } finally {
+      setGeneratingQR(false);
+    }
+  };
+
+  // Payment verification
+  const [verifyingPayment, setVerifyingPayment] = useState<{ reference: Reference; asset: TokenAsset } | null>(null);
+  const [verificationResult, setVerificationResult] = useState<{ ok: boolean; status: string; reason?: string } | null>(null);
+  const [recipientValidation, setRecipientValidation] = useState<{ ok: boolean; reason?: string } | null>(null);
+
+  const verifyPaymentForReference = useCallback(async (reference: Reference, asset: TokenAsset) => {
+    setVerifyingPayment({ reference, asset });
+    setVerificationResult(null);
+    try {
+      const result = await chain.verifyPayment(reference, asset, merchantWallet as any);
+      setVerificationResult({ ok: result.ok, status: result.ok ? 'confirmed' : result.status, reason: 'ok' in result ? undefined : (result as any).reason });
+      if (result.ok && onReceivePayment) {
+        const newTx: Transaction = {
+          id: `tx-${Date.now()}`,
+          title: `Cobro: ${concept}`,
+          counterparty: clientPayerName,
+          type: 'received',
+          status: 'completed',
+          amount: Number(result.receipt.amount.ui.toFixed(2)),
+          fiatAmount: Number(result.receipt.amount.ui.toFixed(2)),
+          fiatCurrency: 'USD',
+          timestamp: 'Just now',
+          date: new Date(),
+          method: 'Solana Pay',
+          referenceId: reference,
+          note: `Cobro verificado on-chain`,
+          txHash: result.receipt.signature,
+        };
+        onReceivePayment(newTx);
+      }
+    } catch (error) {
+      setVerificationResult({ ok: false, status: 'failed', reason: (error as Error).message });
+    } finally {
+      setVerifyingPayment(null);
+    }
+  }, [concept, clientPayerName, onReceivePayment]);
+
+  const handleVerifyPayment = () => {
+    if (paymentRequest) {
+      verifyPaymentForReference(paymentRequest.reference, usdcDevnet);
+    }
   };
 
   const handleResetPaymentLink = () => {
@@ -229,6 +328,27 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                 <p className="text-xs text-[#ff5a1f] font-mono">{recipient}</p>
               </div>
             </div>
+
+            {recipientValidation && (
+              <div className={`p-3 rounded-xl text-xs ${
+                recipientValidation.ok 
+                  ? 'bg-[#10b981]/20 border border-[#10b981]/30 text-[#26e5c8]' 
+                  : 'bg-red-900/20 border border-red-900/30 text-red-400'
+              }`}>
+                <div className="flex items-center gap-1.5">
+                  {recipientValidation.ok ? (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  ) : (
+                    <AlertCircle className="w-3.5 h-3.5" />
+                  )}
+                  <span>
+                    {recipientValidation.ok 
+                      ? 'Destinatario válido para USDC' 
+                      : `Advertencia: ${recipientValidation.reason || 'Dirección no válida'}`}
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="text-xs font-medium text-zinc-400 block mb-1">
@@ -422,48 +542,27 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             )}
 
             {/* QR Generated Section - Appears below inputs in SAME screen */}
-            {qrGenerated && !simulatedPaymentSuccess && (
+            {qrGenerated && !simulatedPaymentSuccess && paymentRequest && (
               <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
-                {/* Visual QR Card */}
+                {/* Real QR Code Card */}
                 <div className="p-4 rounded-3xl bg-white text-black max-w-[240px] mx-auto my-2 shadow-xl flex flex-col items-center">
                   <div className="w-full flex items-center justify-between pb-2 border-b border-zinc-200 text-xs">
                     <span className="font-bold tracking-tight text-zinc-900">{INITIAL_USER.handle}</span>
                     <span className="font-semibold text-[#ff5a1f]">Ⓢ {linkAmount.toFixed(2)}</span>
                   </div>
 
-                  <div className="w-38 h-38 bg-white p-2 my-2 flex flex-col justify-between">
-                    <div className="flex justify-between">
-                      <div className="w-10 h-10 border-4 border-black p-1 flex items-center justify-center">
-                        <div className="w-5 h-5 bg-black" />
-                      </div>
-                      <div className="w-8 h-8 grid grid-cols-2 gap-1 p-0.5">
-                        <div className="bg-black" />
-                        <div className="bg-black" />
-                      </div>
-                      <div className="w-10 h-10 border-4 border-black p-1 flex items-center justify-center">
-                        <div className="w-5 h-5 bg-black" />
-                      </div>
-                    </div>
-                    <div className="my-auto py-1 flex items-center justify-center">
-                      <div className="w-9 h-9 rounded-full bg-[#ff5a1f] text-white flex items-center justify-center font-bold text-xs shadow-md">
-                        Ⓢ
-                      </div>
-                    </div>
-                    <div className="flex justify-between items-end">
-                      <div className="w-10 h-10 border-4 border-black p-1 flex items-center justify-center">
-                        <div className="w-5 h-5 bg-black" />
-                      </div>
-                      <div className="w-14 h-7 grid grid-cols-3 gap-1">
-                        <div className="bg-black" />
-                        <div className="bg-black" />
-                        <div className="bg-black" />
-                      </div>
-                    </div>
+                  <div className="w-56 h-56 bg-white p-2 my-2 flex items-center justify-center">
+                    <div dangerouslySetInnerHTML={{
+                      __html: paymentRequest.qrSvg
+                    }} />
                   </div>
 
                   <p className="text-[11px] font-medium text-zinc-600 truncate max-w-full">
                     {concept}
                   </p>
+                  {qrError && (
+                    <p className="text-[11px] text-red-500 text-center mt-2">{qrError}</p>
+                  )}
                 </div>
 
                 {/* Share Options Strip - Only Copy + WhatsApp */}
@@ -504,6 +603,36 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                     )}
                   </button>
                 </div>
+
+                {/* Verify Payment (Real Chain Verification) */}
+                {paymentRequest && (
+                  <div className="mt-2 p-3 rounded-xl bg-[#26e5c8]/10 border border-[#26e5c8]/30">
+                    <button
+                      onClick={handleVerifyPayment}
+                      disabled={verifyingPayment !== null}
+                      className="w-full py-2.5 px-3 rounded-lg bg-[#26e5c8] hover:bg-[#36f5d8] text-black text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
+                    >
+                      {verifyingPayment ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Verificando en la cadena...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Search className="w-4 h-4" />
+                          <span>Verificar pago en devnet</span>
+                        </>
+                      )}
+                    </button>
+                    {verificationResult && (
+                      <p className={`text-xs text-center mt-2 ${verificationResult.ok ? 'text-[#26e5c8]' : 'text-red-400'}`}>
+                        {verificationResult.ok
+                          ? `Pago confirmado: ${verificationResult.status}`
+                          : `Error: ${verificationResult.reason || verificationResult.status}`}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* No buttons here - Editar and Ir a Inicio removed as requested */}
               </div>

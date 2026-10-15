@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Camera, Check, Loader2, QrCode, ScanLine, X } from 'lucide-react';
+import { ArrowLeft, Camera, Check, Loader2, QrCode, ScanLine, X, AlertCircle } from 'lucide-react';
 import { Translations } from '../i18n/translations';
 import { NotificationToast, ToastData } from './NotificationToast';
+import { chain, assetBySymbol, type ParsedPaymentRequest, type ParsedTransferRequest } from '../adapters';
 
 interface QrScannerFlowProps {
   onClose: () => void;
@@ -13,9 +14,12 @@ type ScanState = 'idle' | 'requesting' | 'scanning' | 'detected' | 'denied' | 'u
 export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
   const [state, setState] = useState<ScanState>('idle');
   const [detectedValue, setDetectedValue] = useState<string | null>(null);
+  const [parsedRequest, setParsedRequest] = useState<ParsedPaymentRequest | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
+  const [scanError, setScanError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -49,20 +53,83 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
     }
   }, []);
 
-  useEffect(() => {
-    return () => stopCamera();
-  }, [stopCamera]);
+  // Real barcode detection using Barcode Detection API
+  const startBarcodeScanning = useCallback(() => {
+    if (!videoRef.current || state !== 'scanning') return;
 
-  // Prototype: simulate a successful detection 3s after the camera goes live.
-  useEffect(() => {
-    if (state !== 'scanning') return;
-    const timer = window.setTimeout(() => {
-      setDetectedValue('rewallet.app/pay/@cata_soto/45usdc');
+    const scan = async () => {
+      if (!videoRef.current || state !== 'scanning') return;
+
+      try {
+        // Try Barcode Detection API first (Chrome/Edge)
+        if ('BarcodeDetector' in window) {
+          const barcodeDetector = new (window as any).BarcodeDetector({
+            formats: ['qr_code'],
+          });
+          const barcodes = await barcodeDetector.detect(videoRef.current);
+          if (barcodes.length > 0) {
+            const rawValue = barcodes[0].rawValue;
+            handleBarcodeDetected(rawValue);
+            return;
+          }
+        }
+      } catch (error) {
+        // Barcode Detection API not available or failed, continue to fallback
+        console.debug('BarcodeDetector error:', error);
+      }
+    };
+
+    // Scan every 300ms
+    scanIntervalRef.current = setInterval(scan, 300);
+  }, [state]);
+
+  // Stop scanning interval
+  const stopBarcodeScanning = useCallback(() => {
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+  }, []);
+
+  // Handle detected barcode
+  const handleBarcodeDetected = useCallback((rawValue: string) => {
+    stopBarcodeScanning();
+    setDetectedValue(rawValue);
+    
+    // Parse with Solana Pay adapter
+    const parsed = chain.parsePaymentRequest(rawValue);
+    if (parsed) {
+      setParsedRequest(parsed);
       setState('detected');
       stopCamera();
-    }, 3000);
-    return () => window.clearTimeout(timer);
-  }, [state, stopCamera]);
+    } else {
+      setScanError('Código QR no es un formato Solana Pay válido');
+      setState('detected');
+      stopCamera();
+    }
+  }, [stopBarcodeScanning, stopCamera]);
+
+  // Start/stop scanning when state changes
+  useEffect(() => {
+    if (state === 'scanning') {
+      // Wait for video to be ready
+      const timer = setTimeout(() => {
+        startBarcodeScanning();
+      }, 500);
+      return () => clearTimeout(timer);
+    } else {
+      stopBarcodeScanning();
+    }
+  }, [state, startBarcodeScanning, stopBarcodeScanning]);
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+      stopBarcodeScanning();
+    };
+  }, [stopCamera, stopBarcodeScanning]);
+
+
 
   const handleConfirmScan = useCallback(() => {
     setToast({
@@ -168,19 +235,57 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
               <Check className="w-7 h-7 stroke-[3]" />
             </div>
             <p className="text-sm font-semibold text-white mb-1">{t.qrScannerDetected}</p>
-            <p className="text-xs font-mono text-[#26e5c8] break-all max-w-[240px] mb-4">
-              {detectedValue}
-            </p>
-            <div className="flex items-center gap-2">
+            
+            {parsedRequest && parsedRequest.kind === 'transfer' && (
+              <div className="w-full max-w-[280px] mb-4 p-3 rounded-xl bg-white/5 border border-white/10 text-left">
+                <p className="text-xs text-zinc-400 mb-1">Transfer Request</p>
+                <p className="text-xs font-mono text-white break-all mb-2">
+                  Recipient: {parsedRequest.recipient.slice(0, 8)}...{parsedRequest.recipient.slice(-6)}
+                </p>
+                {parsedRequest.amount && (
+                  <p className="text-xs font-mono text-[#26e5c8] break-all mb-1">
+                    Amount: {parsedRequest.amountUi?.toFixed(2) || parsedRequest.amount}
+                    {parsedRequest.splToken ? ` ${assetBySymbol('USDC', 'devnet')?.symbol || 'USDC'}` : ' SOL'}
+                  </p>
+                )}
+                {parsedRequest.message && (
+                  <p className="text-xs text-zinc-300 mb-1">Message: {parsedRequest.message}</p>
+                )}
+                {parsedRequest.references.length > 0 && (
+                  <p className="text-xs text-zinc-400">Ref: {parsedRequest.references[0].slice(0, 8)}...</p>
+                )}
+              </div>
+            )}
+            
+            {parsedRequest && parsedRequest.kind === 'transaction' && (
+              <div className="w-full max-w-[280px] mb-4 p-3 rounded-xl bg-white/5 border border-white/10 text-left">
+                <p className="text-xs text-zinc-400 mb-1">Transaction Request</p>
+                <p className="text-xs font-mono text-white break-all mb-2">
+                  Link: {parsedRequest.link.slice(0, 40)}...
+                </p>
+              </div>
+            )}
+            
+            {!parsedRequest && detectedValue && (
+              <p className="text-xs font-mono text-[#f87171] break-all max-w-[240px] mb-4">
+                {detectedValue}
+              </p>
+            )}
+            
+            {scanError && (
+              <p className="text-xs text-red-400 mb-4">{scanError}</p>
+            )}
+
+            <div className="flex items-center gap-2 w-full max-w-[280px]">
               <button
                 onClick={handleRescan}
-                className="h-11 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 text-xs font-semibold transition-colors cursor-pointer"
+                className="flex-1 h-11 px-4 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 text-xs font-semibold transition-colors cursor-pointer"
               >
                 Escanear otro
               </button>
               <button
                 onClick={handleConfirmScan}
-                className="h-11 px-5 rounded-xl bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold transition-colors cursor-pointer"
+                className="flex-1 h-11 px-5 rounded-xl bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold transition-colors cursor-pointer"
               >
                 Confirmar
               </button>
