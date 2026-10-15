@@ -432,23 +432,6 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               </div>
             </div>
 
-            {/* Copyable Link Box */}
-            <div className="mt-3 p-3 rounded-2xl bg-[#1e1e21] border border-white/5 flex items-center justify-between">
-              <div className="min-w-0 pr-2">
-                <span className="text-[10px] text-zinc-400 block uppercase font-semibold">
-                  Enlace de cobro para compartir
-                </span>
-                <p className="text-xs font-mono text-[#26e5c8] truncate">{paymentLinkUrl}</p>
-              </div>
-              <button
-                onClick={handleCopyLink}
-                className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white shrink-0 active:scale-95 transition-all cursor-pointer"
-                title="Copiar link"
-              >
-                {copiedLink ? <Check className="w-4 h-4 text-[#26e5c8]" /> : <Copy className="w-4 h-4" />}
-              </button>
-            </div>
-
             {/* Share Options Strip */}
             <div className="grid grid-cols-2 gap-2 mt-3">
               <button
@@ -469,9 +452,6 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
 
             {/* Test Simulation Trigger */}
             <div className="mt-4 p-3 rounded-xl bg-[#ff5a1f]/10 border border-[#ff5a1f]/30">
-              <p className="text-xs font-medium text-zinc-300 mb-2">
-                🧪 <strong className="text-white">Probar flujo:</strong> Simula que {clientPayerName} paga este link en este instante.
-              </p>
               <button
                 onClick={handleSimulateClientPay}
                 disabled={isSimulatingPayment}
