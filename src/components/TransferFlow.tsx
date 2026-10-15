@@ -36,9 +36,9 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   initialRecipient,
   onSubflowChange,
 }) => {
-  // Subflow mode: 'main' (Send list matching screenshot), 'amount' (keypad), 'confirm', 'success', or 'link_amount', 'link_details'
+  // Subflow mode: 'main', 'amount', 'confirm', 'success', 'link_amount', 'link_details', 'link_generated'
   const [subflow, setSubflow] = useState<
-    'main' | 'amount' | 'confirm' | 'success' | 'link_amount' | 'link_details'
+    'main' | 'amount' | 'confirm' | 'success' | 'link_amount' | 'link_details' | 'link_generated'
   >(
     initialMode === 'payment_link'
       ? 'link_amount'
@@ -66,7 +66,6 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [isSimulatingPayment, setIsSimulatingPayment] = useState<boolean>(false);
   const [simulatedPaymentSuccess, setSimulatedPaymentSuccess] = useState<boolean>(false);
-  const [linkDetailsConfirmed, setLinkDetailsConfirmed] = useState<boolean>(false);
 
   const sendAmount = parseFloat(sendAmountStr) || 0;
   const isSendOverBalance = sendAmount > balance;
@@ -161,7 +160,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
     }, 2000);
   };
 
-  // 1. AMOUNT KEYPAD FOR SENDING (No redundant subtitle, just clean title)
+  // 1. AMOUNT KEYPAD FOR SENDING
   if (subflow === 'amount') {
     return (
       <div className="h-full flex flex-col justify-between">
@@ -197,7 +196,6 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             <div className="w-12" />
           </div>
 
-          {/* Amount Box */}
           <div className="p-4 rounded-2xl bg-[#1c1c1f] border border-white/5 mb-4 text-center">
             <span className="text-xs text-zinc-400 block mb-1">Monto a Enviar</span>
             <div className="flex items-center justify-center gap-2 mb-1">
@@ -209,7 +207,6 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             <span className="text-xs text-zinc-500 font-medium">USDC</span>
           </div>
 
-          {/* Recipient Details */}
           <div className="p-4 rounded-2xl bg-[#1e1e21] border border-white/5 space-y-3 mb-4">
             <div className="flex items-center gap-3 pb-3 border-b border-white/5">
               <div className="w-11 h-11 rounded-full bg-[#ff5a1f] flex items-center justify-center font-bold text-white text-base">
@@ -318,7 +315,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
     );
   }
 
-  // 4. PAYMENT LINK SUBFLOW: KEYPAD (Subtitle deleted as requested)
+  // 4. PAYMENT LINK SUBFLOW: KEYPAD
   if (subflow === 'link_amount') {
     return (
       <div className="h-full flex flex-col justify-between">
@@ -326,26 +323,23 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           balance={balance}
           value={linkAmountStr}
           onChange={setLinkAmountStr}
-          actionLabel="Continuar a Detalles del Link"
+          actionLabel="Continuar a Detalles"
           onAction={() => setSubflow('link_details')}
           onBack={() => setSubflow('main')}
-          title="Generar Payment Link"
+          title="Generar Link de Pago"
         />
       </div>
     );
   }
 
-  // 5. PAYMENT LINK SUBFLOW: DETAILS (Ample padding so button is completely above and never covered)
+  // 5. PAYMENT LINK SUBFLOW: DETAILS - Only inputs + Confirmar button (orange)
   if (subflow === 'link_details') {
     return (
       <div className="flex flex-col h-full justify-between text-white px-5 pt-3 pb-8 overflow-y-auto">
         <div>
           <div className="flex items-center justify-between min-h-[44px] mb-2">
             <button
-              onClick={() => {
-                setLinkDetailsConfirmed(false);
-                setSubflow('link_amount');
-              }}
+              onClick={() => setSubflow('link_amount')}
               className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
             >
               <ArrowLeft className="w-5 h-5" />
@@ -392,10 +386,103 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               />
             </div>
 
-            {linkDetailsConfirmed ? (
-              <>
-                {/* Visual QR Card - Displayed after confirming details */}
-                <div className="pt-2">
+            {/* Preview QR Card (visual only, not functional yet) */}
+            <div className="pt-2">
+              <div className="p-4 rounded-3xl bg-white text-black max-w-[240px] mx-auto my-2 shadow-xl flex flex-col items-center opacity-50">
+                <div className="w-full flex items-center justify-between pb-2 border-b border-zinc-200 text-xs">
+                  <span className="font-bold tracking-tight text-zinc-900">{INITIAL_USER.handle}</span>
+                  <span className="font-semibold text-[#ff5a1f]">Ⓢ {linkAmount.toFixed(2)}</span>
+                </div>
+
+                <div className="w-38 h-38 bg-white p-2 my-2 flex flex-col justify-between">
+                  <div className="flex justify-between">
+                    <div className="w-10 h-10 border-4 border-black p-1 flex items-center justify-center">
+                      <div className="w-5 h-5 bg-black" />
+                    </div>
+                    <div className="w-8 h-8 grid grid-cols-2 gap-1 p-0.5">
+                      <div className="bg-black" />
+                      <div className="bg-black" />
+                    </div>
+                    <div className="w-10 h-10 border-4 border-black p-1 flex items-center justify-center">
+                      <div className="w-5 h-5 bg-black" />
+                    </div>
+                  </div>
+                  <div className="my-auto py-1 flex items-center justify-center">
+                    <div className="w-9 h-9 rounded-full bg-[#ff5a1f] text-white flex items-center justify-center font-bold text-xs shadow-md">
+                      Ⓢ
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-end">
+                    <div className="w-10 h-10 border-4 border-black p-1 flex items-center justify-center">
+                      <div className="w-5 h-5 bg-black" />
+                    </div>
+                    <div className="w-14 h-7 grid grid-cols-3 gap-1">
+                      <div className="bg-black" />
+                      <div className="bg-black" />
+                      <div className="bg-black" />
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-[11px] font-medium text-zinc-600 truncate max-w-full">
+                  {concept}
+                </p>
+              </div>
+              <p className="text-[11px] text-zinc-500 text-center mt-1">Vista previa del QR</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Confirmar button - ORANGE, at bottom */}
+        <div className="pt-4 pb-2">
+          <button
+            onClick={() => setSubflow('link_generated')}
+            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer transition-all"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>Confirmar</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 6. PAYMENT LINK SUBFLOW: GENERATED - Full QR + Share + Ir a Inicio (orange)
+  if (subflow === 'link_generated') {
+    return (
+      <div className="flex flex-col h-full justify-between text-white px-5 pt-3 pb-8 overflow-y-auto">
+        <div>
+          <div className="flex items-center justify-between min-h-[44px] mb-2">
+            <button
+              onClick={() => {
+                setSimulatedPaymentSuccess(false);
+                setSubflow('link_details');
+              }}
+              className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
+            >
+              <ArrowLeft className="w-5 h-5" />
+              <span>Atras</span>
+            </button>
+            <h1 className="text-[17px] font-semibold text-white tracking-tight">Link de Pago</h1>
+            <div className="w-12" />
+          </div>
+
+          {simulatedPaymentSuccess ? (
+            <div className="my-6 p-5 rounded-2xl bg-[#10b981]/15 border border-[#10b981]/40 text-center animate-in fade-in zoom-in-95 duration-300">
+              <div className="w-12 h-12 rounded-full bg-[#10b981] text-black flex items-center justify-center mx-auto mb-3">
+                <CheckCircle2 className="w-7 h-7 stroke-[2.5]" />
+              </div>
+              <h3 className="text-lg font-bold text-white mb-1">¡Cobro Recibido con Éxito!</h3>
+              <p className="text-xs text-zinc-300 mb-2">
+                {clientPayerName} acaba de pagar Ⓢ {linkAmount.toFixed(2)} por "{concept}".
+              </p>
+              <span className="text-xs font-semibold text-[#26e5c8] block">
+                +Ⓢ {linkAmount.toFixed(2)} sumados a tu saldo
+              </span>
+            </div>
+          ) : (
+            <>
+              {/* Visual QR Card - FULL FUNCTIONAL */}
               <div className="p-4 rounded-3xl bg-white text-black max-w-[240px] mx-auto my-2 shadow-xl flex flex-col items-center">
                 <div className="w-full flex items-center justify-between pb-2 border-b border-zinc-200 text-xs">
                   <span className="font-bold tracking-tight text-zinc-900">{INITIAL_USER.handle}</span>
@@ -436,79 +523,71 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                   {concept}
                 </p>
               </div>
-            </div>
 
-            {/* Share Options Strip */}
-            <div className="grid grid-cols-2 gap-2 mt-3">
-              <button
-                onClick={handleCopyLink}
-                className="py-2.5 px-3 rounded-xl bg-[#222225] hover:bg-[#2b2b2f] text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-colors border border-white/5 cursor-pointer"
-              >
-                {copiedLink ? <Check className="w-3.5 h-3.5 text-[#26e5c8]" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedLink ? '¡Copiado!' : 'Copiar Link'}</span>
-              </button>
-              <button
-                onClick={handleShareWhatsApp}
-                className="py-2.5 px-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 text-[#25D366] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-[#25D366]/30 cursor-pointer"
-              >
-                <Share2 className="w-3.5 h-3.5" />
-                <span>WhatsApp</span>
-              </button>
-            </div>
-
-            {/* Test Simulation Trigger */}
-            <div className="mt-4 p-3 rounded-xl bg-[#ff5a1f]/10 border border-[#ff5a1f]/30">
-              <button
-                onClick={handleSimulateClientPay}
-                disabled={isSimulatingPayment}
-                className="w-full py-2.5 px-3 rounded-lg bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                {isSimulatingPayment ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Simulando pago de cliente en vivo...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    <span>Simular pago de cliente ahora</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-                {simulatedPaymentSuccess && (
-                  <div className="my-4 p-5 rounded-2xl bg-[#10b981]/15 border border-[#10b981]/40 text-center animate-in fade-in zoom-in-95 duration-300">
-                <div className="w-12 h-12 rounded-full bg-[#10b981] text-black flex items-center justify-center mx-auto mb-3">
-                  <CheckCircle2 className="w-7 h-7 stroke-[2.5]" />
+              {/* Copyable Link Box */}
+              <div className="mt-3 p-3 rounded-2xl bg-[#1e1e21] border border-white/5 flex items-center justify-between">
+                <div className="min-w-0 pr-2">
+                  <span className="text-[10px] text-zinc-400 block uppercase font-semibold">
+                    Enlace de cobro para compartir
+                  </span>
+                  <p className="text-xs font-mono text-[#26e5c8] truncate">{paymentLinkUrl}</p>
                 </div>
-                <h3 className="text-lg font-bold text-white mb-1">¡Cobro Recibido con Éxito!</h3>
-                <p className="text-xs text-zinc-300 mb-2">
-                  {clientPayerName} acaba de pagar Ⓢ {linkAmount.toFixed(2)} por &quot;{concept}&quot;.
-                </p>
-                <span className="text-xs font-semibold text-[#26e5c8] block">
-                  +Ⓢ {linkAmount.toFixed(2)} sumados a tu saldo
-                </span>
+                <button
+                  onClick={handleCopyLink}
+                  className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white shrink-0 active:scale-95 transition-all cursor-pointer"
+                  title="Copiar link"
+                >
+                  {copiedLink ? <Check className="w-4 h-4 text-[#26e5c8]" /> : <Copy className="w-4 h-4" />}
+                </button>
               </div>
-                )}
-              </>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setLinkDetailsConfirmed(true)}
-                className="w-full h-12 rounded-2xl bg-[#26e5c8] hover:bg-[#56f0d9] text-[#070709] font-semibold text-sm transition-colors cursor-pointer"
-              >
-                Confirmar concepto y cliente
-              </button>
-            )}
-          </div>
+
+              {/* Share Options Strip */}
+              <div className="grid grid-cols-2 gap-2 mt-3">
+                <button
+                  onClick={handleCopyLink}
+                  className="py-2.5 px-3 rounded-xl bg-[#222225] hover:bg-[#2b2b2f] text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-colors border border-white/5 cursor-pointer"
+                >
+                  {copiedLink ? <Check className="w-3.5 h-3.5 text-[#26e5c8]" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedLink ? '¡Copiado!' : 'Copiar Link'}</span>
+                </button>
+                <button
+                  onClick={handleShareWhatsApp}
+                  className="py-2.5 px-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 text-[#25D366] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-[#25D366]/30 cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>WhatsApp</span>
+                </button>
+              </div>
+
+              {/* Test Simulation Trigger */}
+              <div className="mt-4 p-3 rounded-xl bg-[#ff5a1f]/10 border border-[#ff5a1f]/30">
+                <button
+                  onClick={handleSimulateClientPay}
+                  disabled={isSimulatingPayment}
+                  className="w-full py-2.5 px-3 rounded-lg bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  {isSimulatingPayment ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Simulando pago de cliente en vivo...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      <span>Simular pago de cliente ahora</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Action Button positioned safely above bottom with pb-2 */}
+        {/* Ir a Inicio button - ORANGE, at bottom */}
         <div className="pt-4 pb-2">
           <button
             onClick={onClose}
-            className="w-full h-13 rounded-2xl bg-zinc-700 hover:bg-zinc-600 active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-black/20 cursor-pointer transition-all"
+            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer transition-all"
           >
             <span>Ir a Inicio</span>
           </button>
@@ -517,11 +596,10 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
     );
   }
 
-  // 7. MAIN VIEW (EXACTLY MATCHING THE USER'S ATTACHED SCREENSHOT)
+  // 7. MAIN VIEW
   return (
     <div className="flex flex-col h-full justify-between text-white px-5 pt-3 pb-24 overflow-y-auto select-none">
       <div>
-        {/* Header: < Back on left, Send centered */}
         <div className="flex items-center justify-between min-h-[44px] mb-3">
           <button
             onClick={onClose}
@@ -534,12 +612,10 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           <div className="w-12" />
         </div>
 
-        {/* Section: To */}
         <div className="mb-4">
           <label className="text-[14px] font-semibold text-zinc-300 block mb-2">
             Para
           </label>
-          {/* Search by username input: white rounded pill as in screenshot */}
           <div className="w-full h-12 rounded-2xl bg-white flex items-center px-4 shadow-sm">
             <Search className="w-5 h-5 text-zinc-600 mr-2.5 shrink-0" />
             <input
@@ -561,13 +637,11 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           </div>
         </div>
 
-        {/* Section: Recent (in teal/cyan like screenshot) */}
         <div className="mb-4">
           <h2 className="text-[13px] font-semibold text-[#26e5c8] mb-2">
-            Recien
+            Recientes
           </h2>
 
-          {/* Contact rows: same clean style as Recents rows */}
           <div className="divide-y divide-white/[0.04]">
             {filteredContacts.map((contact) => (
               <button
@@ -575,14 +649,11 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                 onClick={() => handleSelectContact(contact)}
                 className="w-full flex items-center py-3 px-1 hover:bg-white/[0.03] active:bg-white/[0.06] rounded-xl transition-colors text-left group cursor-pointer"
               >
-                {/* Circular Avatar with smiley matching screenshot */}
                 <div
                   className={`w-10 h-10 rounded-full ${contact.avatarBg} flex items-center justify-center text-white text-sm font-bold shrink-0 mr-3.5 shadow-sm transition-transform group-hover:scale-105`}
                 >
                   <span className="select-none">◡̈</span>
                 </div>
-
-                {/* Handle matching screenshot */}
                 <span className="text-[15px] font-semibold text-white tracking-tight leading-snug">
                   {contact.handle}
                 </span>
@@ -591,19 +662,16 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           </div>
         </div>
 
-        {/* Section: Or (in teal/cyan like screenshot) */}
         <div className="mb-3 mt-4">
           <h2 className="text-[13px] font-semibold text-[#26e5c8] mb-2.5">
             O
           </h2>
 
-          {/* Generate a payment link card matching screenshot */}
           <button
             onClick={() => setSubflow('link_amount')}
             className="w-full p-4 rounded-2xl bg-[#1e1e21] hover:bg-[#252529] active:bg-[#2b2b30] flex items-center justify-between transition-all border border-white/[0.04] text-left group cursor-pointer"
           >
             <div className="flex items-center gap-3.5">
-              {/* Brown box with orange link chain icon */}
               <div className="w-11 h-11 rounded-xl bg-[#34241e] border border-[#ff5a1f]/30 flex items-center justify-center text-[#ff5a1f]">
                 <LinkIcon className="w-5 h-5 stroke-[2.2]" />
               </div>
