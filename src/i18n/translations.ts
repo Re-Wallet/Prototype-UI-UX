@@ -130,7 +130,7 @@ export const translations: Record<Language, Translations> = {
     navTransfer: 'Transfer',
     navSettings: 'Settings',
 
-    yourBalance: 'Your Balance',
+    yourBalance: 'Saldo actual',
     hideBalance: 'Ocultar saldo',
     showBalance: 'Mostrar saldo',
     deposit: 'Deposit',
