@@ -190,7 +190,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
             >
               <ArrowLeft className="w-5 h-5" />
-              <span>Back</span>
+              <span>Atras</span>
             </button>
             <h1 className="text-[17px] font-semibold text-white tracking-tight">Send</h1>
             <div className="w-12" />

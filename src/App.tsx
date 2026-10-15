@@ -193,12 +193,9 @@ export default function App() {
           {/* Header with @cata_soto, language toggle, and eye icon */}
           <Header
             handle={INITIAL_USER.handle}
-            isBalanceHidden={isBalanceHidden}
-            onToggleBalance={() => setIsBalanceHidden(!isBalanceHidden)}
             onOpenProfile={() => setActiveTab('settings')}
             language={language}
             onToggleLanguage={toggleLanguage}
-            t={t}
           />
           <SettingsView
             onLogout={handleResetData}
@@ -218,7 +215,6 @@ export default function App() {
           onOpenProfile={() => setActiveTab('settings')}
           language={language}
           onToggleLanguage={toggleLanguage}
-          t={t}
         />
 
         <BalanceCard
