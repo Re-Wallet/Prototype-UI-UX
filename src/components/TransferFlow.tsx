@@ -345,9 +345,9 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
             >
               <ArrowLeft className="w-5 h-5" />
-              <span>Back</span>
+              <span>Atras</span>
             </button>
-            <h1 className="text-[17px] font-semibold text-white tracking-tight">Payment Link</h1>
+            <h1 className="text-[17px] font-semibold text-white tracking-tight">Link de Pago</h1>
             <div className="w-12" />
           </div>
 
@@ -388,16 +388,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               />
             </div>
 
-            <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 text-xs text-zinc-400 space-y-1">
-              <div className="flex justify-between">
-                <span>Tu Handle de Cobro</span>
-                <span className="text-[#ff5a1f] font-mono">{INITIAL_USER.handle}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Comisión de Cobro Mozaik</span>
-                <span className="text-[#26e5c8] font-semibold">$0.00 (Gratis)</span>
-              </div>
-            </div>
+
           </div>
         </div>
 
