@@ -36,9 +36,9 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   initialRecipient,
   onSubflowChange,
 }) => {
-  // Subflow mode: 'main' (Send list matching screenshot), 'amount' (keypad), 'confirm', 'success', or 'link_amount', 'link_details', 'link_generated'
+  // Subflow mode: 'main' (Send list matching screenshot), 'amount' (keypad), 'confirm', 'success', or 'link_amount', 'link_details'
   const [subflow, setSubflow] = useState<
-    'main' | 'amount' | 'confirm' | 'success' | 'link_amount' | 'link_details' | 'link_generated'
+    'main' | 'amount' | 'confirm' | 'success' | 'link_amount' | 'link_details'
   >(
     initialMode === 'payment_link'
       ? 'link_amount'
@@ -345,9 +345,9 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
             >
               <ArrowLeft className="w-5 h-5" />
-              <span>Back</span>
+              <span>Atras</span>
             </button>
-            <h1 className="text-[17px] font-semibold text-white tracking-tight">Payment Link</h1>
+            <h1 className="text-[17px] font-semibold text-white tracking-tight">Link de Pago</h1>
             <div className="w-12" />
           </div>
 
@@ -388,66 +388,8 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               />
             </div>
 
-            <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/5 text-xs text-zinc-400 space-y-1">
-              <div className="flex justify-between">
-                <span>Tu Handle de Cobro</span>
-                <span className="text-[#ff5a1f] font-mono">{INITIAL_USER.handle}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Comisión de Cobro Mozaik</span>
-                <span className="text-[#26e5c8] font-semibold">$0.00 (Gratis)</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Action Button positioned safely above bottom with pb-2 */}
-        <div className="pt-4 pb-2">
-          <button
-            onClick={() => setSubflow('link_generated')}
-            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer transition-all"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>Generar Link & QR</span>
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // 6. PAYMENT LINK SUBFLOW: GENERATED & SHARE (Ample padding so button is never covered)
-  if (subflow === 'link_generated') {
-    return (
-      <div className="flex flex-col h-full justify-between text-white px-5 pt-3 pb-8 overflow-y-auto">
-        <div>
-          <div className="flex items-center justify-between min-h-[44px] mb-2">
-            <button
-              onClick={() => setSubflow('link_details')}
-              className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
-            >
-              <ArrowLeft className="w-5 h-5" />
-              <span>Back</span>
-            </button>
-            <h1 className="text-[17px] font-semibold text-white tracking-tight">Payment Link</h1>
-            <div className="w-12" />
-          </div>
-
-          {simulatedPaymentSuccess ? (
-            <div className="my-6 p-5 rounded-2xl bg-[#10b981]/15 border border-[#10b981]/40 text-center animate-in fade-in zoom-in-95 duration-300">
-              <div className="w-12 h-12 rounded-full bg-[#10b981] text-black flex items-center justify-center mx-auto mb-3">
-                <CheckCircle2 className="w-7 h-7 stroke-[2.5]" />
-              </div>
-              <h3 className="text-lg font-bold text-white mb-1">¡Cobro Recibido con Éxito!</h3>
-              <p className="text-xs text-zinc-300 mb-2">
-                {clientPayerName} acaba de pagar Ⓢ {linkAmount.toFixed(2)} por &quot;{concept}&quot;.
-              </p>
-              <span className="text-xs font-semibold text-[#26e5c8] block">
-                +Ⓢ {linkAmount.toFixed(2)} sumados a tu saldo
-              </span>
-            </div>
-          ) : (
-            <>
-              {/* Visual QR Card */}
+            {/* Visual QR Card - Displayed immediately after inputs */}
+            <div className="pt-2">
               <div className="p-4 rounded-3xl bg-white text-black max-w-[240px] mx-auto my-2 shadow-xl flex flex-col items-center">
                 <div className="w-full flex items-center justify-between pb-2 border-b border-zinc-200 text-xs">
                   <span className="font-bold tracking-tight text-zinc-900">{INITIAL_USER.handle}</span>
@@ -488,75 +430,91 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                   {concept}
                 </p>
               </div>
+            </div>
 
-              {/* Copyable Link Box */}
-              <div className="mt-3 p-3 rounded-2xl bg-[#1e1e21] border border-white/5 flex items-center justify-between">
-                <div className="min-w-0 pr-2">
-                  <span className="text-[10px] text-zinc-400 block uppercase font-semibold">
-                    Enlace de cobro para compartir
-                  </span>
-                  <p className="text-xs font-mono text-[#26e5c8] truncate">{paymentLinkUrl}</p>
+            {/* Copyable Link Box */}
+            <div className="mt-3 p-3 rounded-2xl bg-[#1e1e21] border border-white/5 flex items-center justify-between">
+              <div className="min-w-0 pr-2">
+                <span className="text-[10px] text-zinc-400 block uppercase font-semibold">
+                  Enlace de cobro para compartir
+                </span>
+                <p className="text-xs font-mono text-[#26e5c8] truncate">{paymentLinkUrl}</p>
+              </div>
+              <button
+                onClick={handleCopyLink}
+                className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white shrink-0 active:scale-95 transition-all cursor-pointer"
+                title="Copiar link"
+              >
+                {copiedLink ? <Check className="w-4 h-4 text-[#26e5c8]" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+
+            {/* Share Options Strip */}
+            <div className="grid grid-cols-2 gap-2 mt-3">
+              <button
+                onClick={handleCopyLink}
+                className="py-2.5 px-3 rounded-xl bg-[#222225] hover:bg-[#2b2b2f] text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-colors border border-white/5 cursor-pointer"
+              >
+                {copiedLink ? <Check className="w-3.5 h-3.5 text-[#26e5c8]" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedLink ? '¡Copiado!' : 'Copiar Link'}</span>
+              </button>
+              <button
+                onClick={handleShareWhatsApp}
+                className="py-2.5 px-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 text-[#25D366] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-[#25D366]/30 cursor-pointer"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span>WhatsApp</span>
+              </button>
+            </div>
+
+            {/* Test Simulation Trigger */}
+            <div className="mt-4 p-3 rounded-xl bg-[#ff5a1f]/10 border border-[#ff5a1f]/30">
+              <p className="text-xs font-medium text-zinc-300 mb-2">
+                🧪 <strong className="text-white">Probar flujo:</strong> Simula que {clientPayerName} paga este link en este instante.
+              </p>
+              <button
+                onClick={handleSimulateClientPay}
+                disabled={isSimulatingPayment}
+                className="w-full py-2.5 px-3 rounded-lg bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                {isSimulatingPayment ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Simulando pago de cliente en vivo...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    <span>Simular pago de cliente ahora</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {simulatedPaymentSuccess && (
+              <div className="my-4 p-5 rounded-2xl bg-[#10b981]/15 border border-[#10b981]/40 text-center animate-in fade-in zoom-in-95 duration-300">
+                <div className="w-12 h-12 rounded-full bg-[#10b981] text-black flex items-center justify-center mx-auto mb-3">
+                  <CheckCircle2 className="w-7 h-7 stroke-[2.5]" />
                 </div>
-                <button
-                  onClick={handleCopyLink}
-                  className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white shrink-0 active:scale-95 transition-all cursor-pointer"
-                  title="Copiar link"
-                >
-                  {copiedLink ? <Check className="w-4 h-4 text-[#26e5c8]" /> : <Copy className="w-4 h-4" />}
-                </button>
-              </div>
-
-              {/* Share Options Strip */}
-              <div className="grid grid-cols-2 gap-2 mt-3">
-                <button
-                  onClick={handleCopyLink}
-                  className="py-2.5 px-3 rounded-xl bg-[#222225] hover:bg-[#2b2b2f] text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-colors border border-white/5 cursor-pointer"
-                >
-                  {copiedLink ? <Check className="w-3.5 h-3.5 text-[#26e5c8]" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedLink ? '¡Copiado!' : 'Copiar Link'}</span>
-                </button>
-                <button
-                  onClick={handleShareWhatsApp}
-                  className="py-2.5 px-3 rounded-xl bg-[#25D366]/20 hover:bg-[#25D366]/30 text-[#25D366] text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-[#25D366]/30 cursor-pointer"
-                >
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span>WhatsApp</span>
-                </button>
-              </div>
-
-              {/* Test Simulation Trigger */}
-              <div className="mt-4 p-3 rounded-xl bg-[#ff5a1f]/10 border border-[#ff5a1f]/30">
-                <p className="text-xs font-medium text-zinc-300 mb-2">
-                  🧪 <strong className="text-white">Probar flujo:</strong> Simula que {clientPayerName} paga este link en este instante.
+                <h3 className="text-lg font-bold text-white mb-1">¡Cobro Recibido con Éxito!</h3>
+                <p className="text-xs text-zinc-300 mb-2">
+                  {clientPayerName} acaba de pagar Ⓢ {linkAmount.toFixed(2)} por &quot;{concept}&quot;.
                 </p>
-                <button
-                  onClick={handleSimulateClientPay}
-                  disabled={isSimulatingPayment}
-                  className="w-full py-2.5 px-3 rounded-lg bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
-                >
-                  {isSimulatingPayment ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Simulando pago de cliente en vivo...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4" />
-                      <span>Simular pago de cliente ahora</span>
-                    </>
-                  )}
-                </button>
+                <span className="text-xs font-semibold text-[#26e5c8] block">
+                  +Ⓢ {linkAmount.toFixed(2)} sumados a tu saldo
+                </span>
               </div>
-            </>
-          )}
+            )}
+          </div>
         </div>
 
+        {/* Action Button positioned safely above bottom with pb-2 */}
         <div className="pt-4 pb-2">
           <button
             onClick={onClose}
-            className="w-full h-12 rounded-2xl bg-white/5 hover:bg-white/10 text-zinc-300 text-sm font-medium transition-colors cursor-pointer"
+            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer transition-all"
           >
-            Finalizar y Volver
+            <span>Ir a Inicio</span>
           </button>
         </div>
       </div>
