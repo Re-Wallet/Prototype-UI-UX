@@ -133,8 +133,8 @@ export const translations: Record<Language, Translations> = {
     yourBalance: 'Saldo actual',
     hideBalance: 'Ocultar saldo',
     showBalance: 'Mostrar saldo',
-    deposit: 'Recibir',
-    withdraw: 'Enviar',
+    deposit: 'Depósito',
+    withdraw: 'Retiro',
     qrChargeTooltip: 'Cobrar por QR / Payment Link',
 
     recents: 'Reciente',
