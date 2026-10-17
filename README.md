@@ -25,11 +25,34 @@ Open **http://localhost:3000**.
 ### Package manager
 
 **npm is the only supported package manager.** Use the command above verbatim.
-`--legacy-peer-deps` is required: the dependency tree carries unresolved peer
-conflicts (`@noble/ciphers`, `esbuild`) that make a strict install fail.
+`--legacy-peer-deps` is required: the dependency tree carries peer conflicts
+that make a strict install fail.
 
-A consequence: `npm ci` does not work with this lockfile. Use `npm install
---legacy-peer-deps` instead.
+`npm ci` works from a clean checkout, so prefer it in CI and for reproducible
+installs.
+
+#### Why `@noble/ciphers` is pinned in devDependencies
+
+`@ecies/ciphers@0.2.6` (reached through `eciesjs` ->
+`@dynamic-labs-sdk/metamask`) declares `@noble/ciphers@^1.0.0` as a **required
+peer dependency**, while `@dynamic-labs-wallet/forward-mpc-shared` depends on
+`@noble/ciphers@^0.4.1`. npm can only hoist one of them, so the resolver used to
+place `0.4.1` at the root and leave `@ecies/ciphers` with an unsatisfied peer it
+cannot resolve on its own.
+
+The explicit `@noble/ciphers: 1.3.0` devDependency pins `1.3.0` at the root so
+the peer is satisfied, and npm nests `0.4.1` under `forward-mpc-shared`, which
+is what that package declares. Do not "clean this up" by promoting it to a
+regular dependency or by forcing a single global version.
+
+#### Known: `npm ls` reports one `invalid` esbuild entry
+
+`vite@8.3.4` lists `esbuild@^0.27.0 || ^0.28.0` as an **optional** peer, while
+this project depends on `esbuild@^0.25.0` (required by `drizzle-kit`) and
+`tsx` brings its own `0.28`. The root therefore holds `0.25.12` and `npm ls`
+flags the unmet optional peer. This is expected and harmless: the range pair is
+genuinely incompatible, Vite 8 builds through rolldown, and `npm run build`
+passes. Forcing a version would break `drizzle-kit` instead.
 
 ### Before the first payment: point Dynamic at real Solana devnet
 
