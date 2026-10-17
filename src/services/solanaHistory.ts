@@ -87,6 +87,28 @@ function toUiAmount(base: bigint, decimals: number): number {
   return Number(base) / factor;
 }
 
+const SYSTEM_PROGRAM_ID = '11111111111111111111111111111111';
+
+/**
+ * Whether the transaction actually moved native SOL to or from the wallet.
+ *
+ * With `jsonParsed`, a native transfer decodes to
+ * `{ parsed: { info: { source, destination } } }` under the System Program.
+ * Anything else that debits the wallet — most commonly the rent for creating
+ * the recipient's associated token account — is a cost of the transaction, not a
+ * movement the user made.
+ */
+function hasNativeSolTransfer(message: Record<string, unknown>, owner: string): boolean {
+  for (const instruction of asArray(message.instructions)) {
+    const record = asRecord(instruction);
+    if (!record || String(record.programId) !== SYSTEM_PROGRAM_ID) continue;
+    const info = asRecord(asRecord(record.parsed)?.info);
+    if (!info) continue;
+    if (String(info.source) === owner || String(info.destination) === owner) return true;
+  }
+  return false;
+}
+
 export function parseWalletTransaction(
   rawTransaction: unknown,
   owner: Address,
@@ -112,7 +134,12 @@ export function parseWalletTransaction(
   if (preLamports !== null && postLamports !== null) {
     const fee = keys[0] === owner ? asBigInt(meta.fee) ?? 0n : 0n;
     const delta = postLamports - preLamports + fee;
-    if (delta !== 0n) {
+    // Adding back `fee` absorbs the network fee. What remains is either a real
+    // SOL movement or a cost of the transaction, and only the former belongs in
+    // a consumer's history: a USDC withdrawal to a new recipient creates their
+    // associated token account, and that ~0.002 SOL rent would otherwise show up
+    // as its own "Envío SOL" row right under the payment.
+    if (delta !== 0n && hasNativeSolTransfer(message, owner)) {
       const amount = Math.abs(Number(delta)) / 1_000_000_000;
       const incoming = delta > 0n;
       movements.push({

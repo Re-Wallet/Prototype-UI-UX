@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { X, Check, Copy, Share2, ArrowDownLeft, ArrowUpRight, Download, CheckCircle2 } from 'lucide-react';
+import { X, Check, Copy, Share2, ArrowDownLeft, ArrowUpRight, Download, CheckCircle2, ExternalLink } from 'lucide-react';
+import { chain } from '../adapters';
 import { Transaction } from '../types/wallet';
 
 interface TransactionReceiptModalProps {
@@ -21,9 +22,15 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
   const isIncoming = transaction.type === 'deposit' || transaction.type === 'received';
   const isCompleted = transaction.status === 'completed';
 
+  // The on-chain identifier is the signature. `txHash` is authoritative and
+  // `referenceId` mirrors it on every flow that submits a transaction, so prefer
+  // the former and fall back for records that only carry the legacy field.
+  const signature = transaction.txHash || transaction.referenceId || null;
+  const explorerUrl = signature ? chain.explorerTxUrl(signature) : null;
+
   const handleCopyId = () => {
     setCopied(true);
-    navigator.clipboard?.writeText(transaction.referenceId || transaction.id);
+    navigator.clipboard?.writeText(signature || transaction.id);
     setTimeout(() => setCopied(false), 2000);
   };
 
@@ -122,28 +129,27 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
             </div>
           )}
 
-          {transaction.referenceId && (
-            <div className="flex items-center justify-between">
-              <span className="text-zinc-400">ID Referencia</span>
-              <div className="flex items-center gap-1.5 font-mono text-zinc-300">
-                <span>{transaction.referenceId}</span>
+          {explorerUrl && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-zinc-400">Ver en el explorador</span>
+              <div className="flex items-center gap-1.5">
+                <a
+                  href={explorerUrl}
+                  rel="noreferrer"
+                  target="_blank"
+                  className="inline-flex items-center gap-1 text-[#26e5c8] hover:text-white transition-colors"
+                >
+                  <span>Ver transacción</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
                 <button
                   onClick={handleCopyId}
                   className="p-1 hover:text-white transition-colors"
-                  title="Copiar ID"
+                  title="Copiar hash"
                 >
                   {copied ? <Check className="w-3 h-3 text-[#26e5c8]" /> : <Copy className="w-3 h-3" />}
                 </button>
               </div>
-            </div>
-          )}
-
-          {transaction.txHash && (
-            <div className="flex items-center justify-between">
-              <span className="text-zinc-400">Hash Blockchain</span>
-              <span className="font-mono text-zinc-400 text-[11px] truncate max-w-[160px]">
-                {transaction.txHash}
-              </span>
             </div>
           )}
 
