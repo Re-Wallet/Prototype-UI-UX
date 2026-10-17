@@ -146,25 +146,6 @@ export async function getPrimaryUser(): Promise<WalletUserProfile | null> {
   return rows.length > 0 ? mapUser(rows[0]) : null;
 }
 
-export async function getUserByHandle(handle: string): Promise<WalletUserProfile | null> {
-  const normalized = handle.startsWith('@') ? handle : `@${handle}`;
-  const rows = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.handle, normalized))
-    .limit(1);
-  return rows.length > 0 ? mapUser(rows[0]) : null;
-}
-
-export async function getUserByPublicKey(publicKey: string): Promise<WalletUserProfile | null> {
-  const rows = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.publicKey, publicKey))
-    .limit(1);
-  return rows.length > 0 ? mapUser(rows[0]) : null;
-}
-
 export async function listTransactions(
   userId: number,
   limit = 50

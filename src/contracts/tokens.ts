@@ -145,9 +145,3 @@ export function amountFromBase(base: bigint, asset: TokenAsset): TokenAmount {
     ui: fromBaseUnits(base, asset.decimals),
   };
 }
-
-/** Format an amount for display, e.g. "25.00 USDC". */
-export function formatAmount(amount: TokenAmount, symbol: string): string {
-  const value = fromBaseUnits(amount.base, amount.decimals);
-  return `${value.toFixed(2)} ${symbol}`;
-}

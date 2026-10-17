@@ -31,20 +31,3 @@ export interface Contact {
   address?: string; // Solana public key for transfers
   isVerified?: boolean;
 }
-
-export interface CurrencyConfig {
-  code: string;
-  symbol: string;
-  ratePerUsdc: number; // 1 USDC = X fiat
-  label: string;
-}
-
-export interface PaymentLink {
-  id: string;
-  title: string;
-  amount: number | null; // null for open amount
-  handle: string;
-  url: string;
-  createdAt: Date;
-  status: 'active' | 'paid' | 'expired';
-}
