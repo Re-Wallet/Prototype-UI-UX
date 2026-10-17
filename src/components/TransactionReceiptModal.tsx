@@ -119,7 +119,7 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
 
           <div className="flex justify-between">
             <span className="text-zinc-400">Método / Red</span>
-            <span className="text-white font-medium">{transaction.method || 'Mozaik'}</span>
+            <span className="text-white font-medium">{transaction.method || 'Re Wallet'}</span>
           </div>
 
           {transaction.counterparty && (

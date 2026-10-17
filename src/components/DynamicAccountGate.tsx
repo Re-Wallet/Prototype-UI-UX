@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useCreateWaasWalletAccounts, useGetWalletAccounts, useInitStatus, useLogout, useOnEvent, useSendEmailOTP, useUser, useVerifyOTP } from '@dynamic-labs-sdk/react-hooks';
 import { getChainsMissingWaasWalletAccounts } from '@dynamic-labs-sdk/client/waas';
-import { ArrowLeft, LoaderCircle, Mail, ShieldCheck, Wallet } from 'lucide-react';
+import { ArrowLeft, LoaderCircle, Mail, Wallet } from 'lucide-react';
 import { PhoneFrame } from './PhoneFrame';
 
 function getErrorMessage(error: unknown): string {
@@ -66,12 +66,14 @@ function SignInScreen() {
 
   return (
     <div className="flex min-h-full flex-col justify-center">
-      <div className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#ff5a1f]/15 text-[#ff5a1f]">
-        <Wallet className="h-7 w-7" />
-      </div>
-      <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-[#ff5a1f]">
-        ReWallet · Solana
-      </p>
+      {/* self-start is required: the column flex container stretches items on
+          the cross axis, which would distort the lockup horizontally. */}
+      <img
+        alt="Re Wallet"
+        className="mb-7 h-14 w-auto self-start select-none"
+        decoding="async"
+        src="/rewallet-lockup.png"
+      />
       <h1 className="mb-3 text-3xl font-bold tracking-tight text-white">
         Your wallet starts here
       </h1>
@@ -139,13 +141,6 @@ function SignInScreen() {
           {otpVerification ? 'Verify and continue' : 'Send verification code'}
         </button>
       </form>
-
-      <div className="mt-8 flex items-start gap-3 rounded-2xl border border-white/5 bg-[#121214] p-4">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-        <p className="text-xs leading-5 text-zinc-400">
-          Your sign-in is secured by Dynamic. Your Solana wallet is created after verification.
-        </p>
-      </div>
     </div>
   );
 }
