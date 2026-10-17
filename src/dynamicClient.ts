@@ -1,7 +1,4 @@
-import { createRequire } from 'node:module';
 import { createDynamicClient } from '@dynamic-labs-sdk/client';
-
-const require = createRequire(import.meta.url);
 
 let client: ReturnType<typeof createDynamicClient> | undefined;
 
@@ -9,9 +6,8 @@ let client: ReturnType<typeof createDynamicClient> | undefined;
  * Lazily construct the Dynamic client.
  *
  * Nothing may run at import time: this module is reachable from the adapter
- * barrel, so a module-scope `import.meta.env` read, `window` access, or a
- * third-party module load would make every pure service that imports the barrel
- * untestable outside Vite.
+ * barrel, so a module-scope `import.meta.env` read or `window` access would
+ * make every pure service that imports the barrel untestable outside Vite.
  */
 export function getDynamicClient() {
   if (!client) {
@@ -26,12 +22,6 @@ export function getDynamicClient() {
         universalLink: window.location.origin,
       },
     });
-    // Required lazily, not statically: importing `@dynamic-labs-sdk/solana/waas`
-    // at module scope runs `assertPackageVersion`, which aborts the process under
-    // `node --test`. It must also run after the client exists, since it registers
-    // the extension on the default client.
-    const { addWaasSolanaExtension } = require('@dynamic-labs-sdk/solana/waas');
-    addWaasSolanaExtension();
   }
   return client;
 }
