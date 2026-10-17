@@ -63,6 +63,16 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
 
     setIsSending(true);
     try {
+      // Confirm Dynamic signs against the same cluster the app is configured
+      // for. See adapters/dynamic-network.ts for why this is not automatic.
+      const alignment = await chain.ensureDynamicNetwork(solanaWallet);
+      if (!alignment.ok) {
+        throw new Error(
+          alignment.alignment.reason ??
+            'La red de la wallet no coincide con la red de la app.'
+        );
+      }
+
       const recipientCheck = await chain.verifyRecipient(recipientAddress as Address, asset);
       if (!recipientCheck.ok) {
         throw new Error(recipientCheck.reason ?? 'La dirección no puede recibir USDC.');

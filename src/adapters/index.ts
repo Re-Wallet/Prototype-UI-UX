@@ -15,7 +15,7 @@ import type {
   WatchPaymentEvent,
   WatchPaymentOptions,
 } from '../contracts/payments';
-import { amountFromBase, amountFromUi, formatAmount } from '../contracts/tokens';
+import { amountFromBase, amountFromUi } from '../contracts/tokens';
 import {
   network,
   isDevnet,
@@ -57,6 +57,14 @@ import {
   tokenAccountRentLamports,
 } from './token';
 import { assetByMint, assetBySymbol, type SupportedCluster } from '../contracts/tokens';
+
+import {
+  inspectDynamicNetwork,
+  ensureDynamicNetwork,
+  genesisHashFor,
+  type AlignResult,
+  type NetworkAlignment,
+} from './dynamic-network';
 
 import {
   verifyPayment,
@@ -125,6 +133,11 @@ export const chain = {
   // --- Guards -------------------------------------------------------------
   meetsCommitment,
   createInMemoryLedger,
+
+  // --- Dynamic network alignment -----------------------------------------
+  inspectDynamicNetwork,
+  ensureDynamicNetwork,
+  genesisHashFor,
 };
 
 // ============================================================================
@@ -141,6 +154,8 @@ export type {
   WatchPaymentEvent,
   WatchPaymentOptions,
   SupportedCluster,
+  AlignResult,
+  NetworkAlignment,
   ParsedPaymentRequest,
   ParsedTransferRequest,
 };
@@ -148,4 +163,4 @@ export type {
 export { assetBySymbol };
 export { assetByMint };
 
-export { amountFromBase, amountFromUi, formatAmount, rpc, rpcSubscriptions };
+export { amountFromBase, amountFromUi, rpc, rpcSubscriptions };

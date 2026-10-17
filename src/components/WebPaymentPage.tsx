@@ -87,6 +87,19 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
     setIsPaying(true);
     setError(null);
     try {
+      // Dynamic resolves the signing cluster from its provider's active
+      // network, not from this app's cluster. Confirm both agree before
+      // building a transaction, otherwise the fee payer is debited on a
+      // network where it has no balance and the failure is an opaque
+      // simulation error.
+      const alignment = await chain.ensureDynamicNetwork(payerWallet);
+      if (!alignment.ok) {
+        throw new Error(
+          alignment.alignment.reason ??
+            'La red de la wallet no coincide con la red de la solicitud.'
+        );
+      }
+
       const recipientCheck = await chain.verifyRecipient(intent.recipient, asset);
       if (!recipientCheck.ok) {
         throw new Error(recipientCheck.reason ?? 'La wallet receptora no puede recibir USDC.');

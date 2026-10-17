@@ -150,6 +150,16 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
 
     setIsSending(true);
     try {
+      // Confirm Dynamic signs against the same cluster the app is configured
+      // for. See adapters/dynamic-network.ts for why this is not automatic.
+      const alignment = await chain.ensureDynamicNetwork(solanaWallet);
+      if (!alignment.ok) {
+        throw new Error(
+          alignment.alignment.reason ??
+            'La red de la wallet no coincide con la red de la app.'
+        );
+      }
+
       const recipientCheck = await chain.verifyRecipient(
         recipientSolanaAddress as Address,
         paymentAsset
