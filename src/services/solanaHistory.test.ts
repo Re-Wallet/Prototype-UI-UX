@@ -15,6 +15,19 @@ test('parses native SOL and USDC outgoing movements without counting the network
     transaction: {
       message: {
         accountKeys: [{ pubkey: owner }, { pubkey: recipient }, { pubkey: ata }, { pubkey: recipientAta }],
+        // Required since 5547b1d: a native SOL movement is only reported when an
+        // explicit System Program transfer touches the wallet. Without this
+        // instruction the ~1 SOL debit is indistinguishable from transaction cost.
+        instructions: [
+          {
+            program: 'system',
+            programId: '11111111111111111111111111111111',
+            parsed: {
+              type: 'transfer',
+              info: { source: owner, destination: recipient, lamports: 1_000_000_000 },
+            },
+          },
+        ],
       },
     },
     meta: {
