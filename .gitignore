@@ -17,3 +17,4 @@ data/
 src/db/migrations/meta/_journal.json.bak
 # Local Pi runtime state
 .atl/
+bun.lock

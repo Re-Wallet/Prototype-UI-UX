@@ -22,6 +22,15 @@ npm run dev
 
 Open **http://localhost:3000**.
 
+### Package manager
+
+**npm is the only supported package manager.** Use the command above verbatim.
+`--legacy-peer-deps` is required: the dependency tree carries unresolved peer
+conflicts (`@noble/ciphers`, `esbuild`) that make a strict install fail.
+
+A consequence: `npm ci` does not work with this lockfile. Use `npm install
+--legacy-peer-deps` instead.
+
 ### Before the first payment: point Dynamic at real Solana devnet
 
 This is the setup step most likely to send you down a wrong path. In the
