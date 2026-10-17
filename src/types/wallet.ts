@@ -9,7 +9,8 @@ export interface Transaction {
   type: TransactionType;
   status: TransactionStatus;
   amount: number; // in USDC
-  fiatAmount: number; // in current selected fiat
+  assetSymbol?: 'SOL' | 'USDC';
+  fiatAmount: number | null; // in current selected fiat, if known
   fiatCurrency: string;
   timestamp: string; // display string like "Today at 10:41 PM"
   date: Date;
@@ -17,6 +18,7 @@ export interface Transaction {
   referenceId?: string;
   note?: string;
   txHash?: string;
+  walletAddress?: string;
 }
 
 export interface Contact {

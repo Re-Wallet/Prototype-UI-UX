@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { ArrowDown, ArrowUp, Loader2 } from 'lucide-react';
 import { Translations } from '../i18n/translations';
-import { chain, type TokenAsset } from '../adapters';
 
 interface BalanceCardProps {
   balance: number;
+  solBalance: number;
+  balanceLoading: boolean;
   isBalanceHidden: boolean;
   onDeposit: () => void;
   onWithdraw: () => void;
@@ -13,62 +14,14 @@ interface BalanceCardProps {
 
 export const BalanceCard: React.FC<BalanceCardProps> = ({
   balance,
+  solBalance,
+  balanceLoading,
   isBalanceHidden,
   onDeposit,
   onWithdraw,
   t,
 }) => {
-  // Format split into integer and decimal parts
-  const formattedBalance = balance.toFixed(2);
-  const [integerPart, decimalPart] = formattedBalance.split('.');
-
-  // Chain balances
-  const [solBalance, setSolBalance] = useState<number | null>(null);
-  const [usdcBalance, setUsdcBalance] = useState<number | null>(null);
-  const [loadingBalances, setLoadingBalances] = useState<boolean>(true);
-  const [balanceError, setBalanceError] = useState<string | null>(null);
-
-  // USDC devnet asset
-  const usdcDevnet: TokenAsset = {
-    symbol: 'USDC',
-    mint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as any,
-    program: 'spl-token',
-    decimals: 6,
-  };
-
-  // SOL asset (native)
-  const solAsset: TokenAsset = {
-    symbol: 'SOL',
-    mint: 'So11111111111111111111111111111111111111112' as any,
-    program: 'spl-token',
-    decimals: 9,
-  };
-
-  // Fetch balances from chain
-  useEffect(() => {
-    const fetchBalances = async () => {
-      if (!chain.isLive()) {
-        setLoadingBalances(false);
-        return;
-      }
-      try {
-        const merchantWallet = (import.meta.env.VITE_MERCHANT_WALLET as string) ||
-          '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU';
-        const balances = await chain.getBalances(merchantWallet as any, [usdcDevnet, solAsset]);
-        const usdc = balances.find(b => b.asset.symbol === 'USDC');
-        const sol = balances.find(b => b.asset.symbol === 'SOL');
-        if (usdc) setUsdcBalance(Number(usdc.ui.toFixed(2)));
-        if (sol) setSolBalance(Number(sol.ui.toFixed(4)));
-      } catch (error) {
-        setBalanceError((error as Error).message);
-        console.error('Failed to fetch chain balances:', error);
-      } finally {
-        setLoadingBalances(false);
-      }
-    };
-
-    fetchBalances();
-  }, []);
+  const [integerPart, decimalPart] = balance.toFixed(2).split('.');
 
   return (
     <div className="px-5 pt-3 pb-3">
@@ -80,12 +33,14 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
       {/* Main Balance Display - USD instead of coin icon */}
       <div className="flex items-baseline gap-2.5 mb-4">
         <span className="text-[13px] font-semibold text-zinc-500 uppercase tracking-wider self-center">
-          USD
+          USDC
         </span>
         {isBalanceHidden ? (
           <span className="text-4xl font-bold tracking-widest text-zinc-300 select-none">
             ••••••
           </span>
+        ) : balanceLoading ? (
+          <Loader2 className="w-8 h-8 animate-spin text-[#ff5a1f]" aria-label="Consultando saldo real" />
         ) : (
           <div className="flex items-baseline tracking-tight font-sans">
             <span className="text-[44px] leading-none font-bold text-white tabular-nums">
@@ -98,31 +53,25 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
         )}
       </div>
 
-      {/* Chain Balances (devnet) */}
-      {(chain.isLive() && (solBalance !== null || usdcBalance !== null)) && (
-        <div className="flex items-center gap-4 mb-4 p-3 rounded-xl bg-[#151517] border border-white/5 text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="text-zinc-400">SOL</span>
-            {loadingBalances ? (
-              <Loader2 className="w-4 h-4 animate-spin text-[#ff5a1f]" />
-            ) : (
-              <span className="text-white font-mono tabular-nums">{solBalance?.toFixed(4) || '0.0000'}</span>
-            )}
+      <div className="mb-4 rounded-2xl border border-white/[0.06] bg-white/[0.025] px-3.5 py-3">
+        <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+          {t.solanaAssets}
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-[11px] text-zinc-500">{t.solBalance}</p>
+            <p className="mt-0.5 text-sm font-semibold tabular-nums text-white">
+              {isBalanceHidden ? '••••' : balanceLoading ? '…' : `${solBalance.toFixed(4)} SOL`}
+            </p>
           </div>
-          <div className="w-px h-4 bg-white/10" />
-          <div className="flex items-center gap-1.5">
-            <span className="text-zinc-400">USDC</span>
-            {loadingBalances ? (
-              <Loader2 className="w-4 h-4 animate-spin text-[#ff5a1f]" />
-            ) : (
-              <span className="text-white font-mono tabular-nums">{usdcBalance?.toFixed(2) || '0.00'}</span>
-            )}
+          <div>
+            <p className="text-[11px] text-zinc-500">{t.usdcBalance}</p>
+            <p className="mt-0.5 text-sm font-semibold tabular-nums text-white">
+              {isBalanceHidden ? '••••' : balanceLoading ? '…' : `${balance.toFixed(2)} USDC`}
+            </p>
           </div>
-          {balanceError && (
-            <span className="text-red-500 ml-2">{balanceError}</span>
-          )}
         </div>
-      )}
+      </div>
 
       {/* Action Row: Deposit (Orange) + Withdraw */}
       <div className="flex items-center gap-2.5">

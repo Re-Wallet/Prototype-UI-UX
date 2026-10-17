@@ -35,9 +35,9 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
   // Format: "USD +" / "USD -" / "USD" (when pending)
   const formatAmountDisplay = () => {
     if (!isCompleted) {
-      return 'USD';
+      return transaction.assetSymbol ?? 'USDC';
     }
-    return `USD ${isIncoming ? '+' : '-'}`;
+    return `${transaction.assetSymbol ?? 'USDC'} ${isIncoming ? '+' : '-'}`;
   };
 
   return (
@@ -147,6 +147,15 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
             </div>
           )}
 
+          {transaction.walletAddress && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-zinc-400">Wallet Solana asociada</span>
+              <span className="font-mono text-zinc-300 text-[11px] break-all text-right">
+                {transaction.walletAddress}
+              </span>
+            </div>
+          )}
+
           {transaction.note && (
             <div className="flex justify-between pt-1 border-t border-white/5">
               <span className="text-zinc-400">Nota / Memo</span>
@@ -154,10 +163,6 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
             </div>
           )}
 
-          <div className="flex justify-between pt-1 border-t border-white/5">
-            <span className="text-zinc-400">Comisión Mozaik</span>
-            <span className="text-[#26e5c8] font-semibold">$0.00 USDC</span>
-          </div>
         </div>
 
         {/* Action Buttons */}

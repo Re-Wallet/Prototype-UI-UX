@@ -1,12 +1,7 @@
 /**
  * Wallet service layer.
  *
- * Owns all business logic for the prototype: it maps database rows to the
- * UI-facing domain types in src/types/wallet.ts so screens never import
- * Drizzle directly.
- *
- * Phase 1 (current): reads from SQLite, writes back to SQLite.
- * Phase 2 (devnet): swap the local write paths for Solana Pay calls.
+ * Maps persisted SQLite wallet records to the API domain types.
  */
 
 import { and, desc, eq, sql } from 'drizzle-orm';
@@ -15,7 +10,6 @@ import { db } from '../db';
 import {
   contacts as contactsTable,
   notifications as notificationsTable,
-  paymentLinks as paymentLinksTable,
   transactions as transactionsTable,
   users as usersTable,
 } from '../db/schema';
@@ -132,11 +126,11 @@ export function mapUser(row: DbUser): WalletUserProfile {
 // ============================================================================
 
 /**
- * Resolve the demo/primary user.
+ * Resolve the primary persisted wallet.
  *
  * Peers (counterparties) are also rows in `users`, so ordering by id alone can
- * pick the wrong wallet. Prefer the KYC-verified wallet that owns transactions
- * and payment links, falling back to the oldest row.
+ * pick the wrong wallet. Prefer the KYC-verified wallet that owns transactions,
+ * falling back to the oldest row.
  */
 export async function getPrimaryUser(): Promise<WalletUserProfile | null> {
   const rows = await db
@@ -217,140 +211,6 @@ export async function getWalletSnapshot(): Promise<WalletSnapshot | null> {
     transactions,
     contacts,
   };
-}
-
-// ============================================================================
-// MUTATIONS (prototype: local ledger only)
-// ============================================================================
-
-export interface RecordTransactionInput {
-  userId: number;
-  type: TransactionType;
-  status?: TransactionStatus;
-  amountUsdc: number;
-  fiatAmount?: number;
-  fiatCurrency?: string;
-  counterpartyHandle?: string;
-  counterpartyName?: string;
-  counterpartyPubkey?: string;
-  method?: string;
-  network?: 'solana' | 'base' | 'polygon' | 'arbitrum';
-  referenceId: string;
-  solanaSignature?: string;
-  referencePubkey?: string;
-  paymentLinkId?: number;
-  memo?: string;
-  note?: string;
-  feeUsdc?: number;
-}
-
-const UI_STATUS_TO_DB: Record<TransactionStatus, string> = {
-  in_progress: 'pending',
-  completed: 'completed',
-  failed: 'failed',
-};
-
-export async function recordTransaction(
-  input: RecordTransactionInput
-): Promise<UiTransaction> {
-  const [row] = await db
-    .insert(transactionsTable)
-    .values({
-      userId: input.userId,
-      type: input.type,
-      status: UI_STATUS_TO_DB[input.status ?? 'completed'],
-      amountUsdc: input.amountUsdc,
-      fiatAmount: input.fiatAmount ?? input.amountUsdc,
-      fiatCurrency: input.fiatCurrency ?? 'USD',
-      counterpartyHandle: input.counterpartyHandle,
-      counterpartyName: input.counterpartyName,
-      counterpartyPubkey: input.counterpartyPubkey,
-      method: input.method,
-      network: input.network ?? 'solana',
-      referenceId: input.referenceId,
-      solanaSignature: input.solanaSignature,
-      referencePubkey: input.referencePubkey,
-      paymentLinkId: input.paymentLinkId,
-      memo: input.memo,
-      note: input.note,
-      feeUsdc: input.feeUsdc ?? 0,
-      confirmedAt: input.status === 'completed' ? new Date() : null,
-    })
-    .returning();
-
-  return mapTransaction(row);
-}
-
-/**
- * Adjust the cached balance for a user. In production the balance is derived
- * from the chain; here we keep a running local figure so the prototype UI reacts.
- */
-export async function adjustBalance(
-  userId: number,
-  deltaUsdc: number
-): Promise<number> {
-  await db
-    .update(usersTable)
-    .set({
-      balanceUsdc: sql`MAX(0, ${usersTable.balanceUsdc} + ${deltaUsdc})`,
-      updatedAt: new Date(),
-    })
-    .where(eq(usersTable.id, userId));
-
-  const [row] = await db
-    .select({ balanceUsdc: usersTable.balanceUsdc })
-    .from(usersTable)
-    .where(eq(usersTable.id, userId))
-    .limit(1);
-
-  return row?.balanceUsdc ?? 0;
-}
-
-export interface CreatePaymentLinkInput {
-  userId: number;
-  slug: string;
-  referencePubkey: string;
-  amountUsdc: number | null;
-  concept: string;
-  clientName?: string;
-  clientEmail?: string;
-  clientPhone?: string;
-}
-
-export async function createPaymentLink(input: CreatePaymentLinkInput) {
-  const [row] = await db
-    .insert(paymentLinksTable)
-    .values({
-      userId: input.userId,
-      slug: input.slug,
-      referencePubkey: input.referencePubkey,
-      amountUsdc: input.amountUsdc,
-      concept: input.concept,
-      clientName: input.clientName,
-      clientEmail: input.clientEmail,
-      clientPhone: input.clientPhone,
-      status: 'active',
-    })
-    .returning();
-
-  return row;
-}
-
-export async function markPaymentLinkPaid(
-  linkId: number,
-  paidByPubkey: string,
-  paidAmountUsdc: number
-) {
-  await db
-    .update(paymentLinksTable)
-    .set({
-      status: 'paid',
-      paidAmountUsdc,
-      paidByPubkey,
-      paidAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(paymentLinksTable.id, linkId));
 }
 
 export async function listNotifications(userId: number, limit = 20) {

@@ -22,6 +22,7 @@ import {
   getAddressEncoder,
   getProgramDerivedAddress,
   isAddress,
+  isOffCurveAddress,
   type Address as KitAddress,
 } from '@solana/kit';
 
@@ -90,6 +91,7 @@ export async function deriveAta(owner: Address, asset: TokenAsset): Promise<Addr
 export interface TokenBalance {
   owner: Address;
   ata: Address;
+  tokenAccounts: Address[];
   asset: TokenAsset;
   /** Raw base units. Zero when the account does not exist yet. */
   base: bigint;
@@ -97,6 +99,32 @@ export interface TokenBalance {
   ui: number;
   /** Whether the token account exists on chain. */
   exists: boolean;
+}
+
+export interface SolBalance {
+  owner: Address;
+  base: bigint;
+  ui: number;
+}
+
+/** Read a wallet's native SOL balance. */
+export async function getSolBalance(owner: Address): Promise<SolBalance> {
+  const result = await rpc().getBalance(owner as never, { commitment: 'confirmed' }).send();
+  const base = BigInt(result.value);
+  return { owner, base, ui: Number(base) / 1_000_000_000 };
+}
+
+/** List every on-chain token account for the wallet and asset mint. */
+export async function getTokenAccountAddresses(
+  owner: Address,
+  asset: TokenAsset
+): Promise<Address[]> {
+  const response = await rpc().getTokenAccountsByOwner(
+    owner as never,
+    { mint: asset.mint },
+    { encoding: 'jsonParsed', commitment: 'confirmed' }
+  ).send();
+  return response.value.map((entry) => String(entry.pubkey) as Address);
 }
 
 /**
@@ -110,22 +138,52 @@ export async function getTokenBalance(
   asset: TokenAsset
 ): Promise<TokenBalance> {
   const ata = await deriveAta(owner, asset);
-
-  try {
-    const result = await rpc().getTokenAccountBalance(ata as never).send();
-    const base = BigInt(result.value.amount);
-
-    return {
-      owner,
-      ata,
-      asset,
-      base,
-      ui: result.value.uiAmount ?? amountFromBase(base, asset).ui,
-      exists: true,
+  const response = await rpc().getTokenAccountsByOwner(
+    owner as never,
+    { mint: asset.mint },
+    { encoding: 'jsonParsed', commitment: 'confirmed' }
+  ).send();
+  const tokenAccounts = response.value.map((entry) => String(entry.pubkey) as Address);
+  let base = 0n;
+  for (const entry of response.value) {
+    const rawData = entry.account.data;
+    if (rawData === null || typeof rawData !== 'object' || !('parsed' in rawData)) {
+      throw new Error('RPC returned a token account without parsed account data');
+    }
+    const parsedData = rawData as {
+      parsed?: {
+        info?: {
+          owner?: string;
+          mint?: string;
+          tokenAmount?: { amount?: string; decimals?: number };
+        };
+      };
     };
-  } catch {
-    return { owner, ata, asset, base: 0n, ui: 0, exists: false };
+    const info = parsedData.parsed?.info;
+    if (!info || info.owner !== owner || info.mint !== asset.mint) {
+      throw new Error('RPC returned a token account that does not match the requested wallet and mint');
+    }
+    if (typeof info.tokenAmount?.amount !== 'string' || typeof info.tokenAmount.decimals !== 'number') {
+      throw new Error('RPC returned an invalid parsed token account balance');
+    }
+    if (info.tokenAmount.decimals !== asset.decimals) {
+      throw new PaymentError('mint-mismatch', 'Token account decimals do not match the configured asset', {
+        expected: asset.decimals,
+        observed: info.tokenAmount.decimals,
+      });
+    }
+    base += BigInt(info.tokenAmount.amount);
   }
+
+  return {
+    owner,
+    ata,
+    tokenAccounts,
+    asset,
+    base,
+    ui: amountFromBase(base, asset).ui,
+    exists: tokenAccounts.length > 0,
+  };
 }
 
 /** Read balances for several assets at once. */
@@ -177,13 +235,24 @@ export async function classifyAddress(addr: Address): Promise<AddressClass> {
   const info = await rpc().getAccountInfo(addr as never, { encoding: 'jsonParsed' }).send();
 
   if (!info.value) {
-    // Unfunded but on-curve: a valid wallet that has not been used yet.
+    if (isOffCurveAddress(addr)) {
+      return {
+        kind: 'needs-verification',
+        reason: 'This address is off-curve; verify that the recipient controls this smart wallet',
+      };
+    }
     return { kind: 'wallet', exists: false };
   }
 
   const owner = String(info.value.owner);
 
   if (owner === SYSTEM_PROGRAM_ID) {
+    if (isOffCurveAddress(addr)) {
+      return {
+        kind: 'needs-verification',
+        reason: 'This address is an off-curve smart wallet; verify the recipient before sending',
+      };
+    }
     return { kind: 'wallet', exists: true };
   }
 

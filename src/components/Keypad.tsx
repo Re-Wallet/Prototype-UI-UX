@@ -13,6 +13,8 @@ interface KeypadProps {
   title?: string;
   subtitle?: string;
   showPresets?: boolean;
+  showBalance?: boolean;
+  allowZero?: boolean;
 }
 
 export const Keypad: React.FC<KeypadProps> = ({
@@ -26,6 +28,8 @@ export const Keypad: React.FC<KeypadProps> = ({
   title,
   subtitle,
   showPresets = true,
+  showBalance = true,
+  allowZero = false,
 }) => {
   // Key press handling
   const handleDigit = (digit: string) => {
@@ -87,11 +91,15 @@ export const Keypad: React.FC<KeypadProps> = ({
           )}
 
           {/* Balance Pill like in Image 3 */}
-          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1e1e22] border border-white/10 text-xs font-medium text-zinc-300 shadow-sm">
-            <span>Balance:</span>
-            <CoinIcon className="w-3.5 h-3.5 text-zinc-400" />
-            <span className="text-white font-semibold tabular-nums">{balance.toFixed(2)}</span>
-          </div>
+          {showBalance ? (
+            <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1e1e22] border border-white/10 text-xs font-medium text-zinc-300 shadow-sm">
+              <span>Balance:</span>
+              <CoinIcon className="w-3.5 h-3.5 text-zinc-400" />
+              <span className="text-white font-semibold tabular-nums">{balance.toFixed(2)}</span>
+            </div>
+          ) : (
+            <div className="w-12" />
+          )}
 
           <div className="w-12" />
         </div>
@@ -168,9 +176,9 @@ export const Keypad: React.FC<KeypadProps> = ({
         <div className="pt-2">
           <button
             onClick={onAction}
-            disabled={actionDisabled || numValue <= 0}
+            disabled={actionDisabled || (!allowZero && numValue <= 0)}
             className={`w-full h-13 rounded-2xl font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg transition-all ${
-              actionDisabled || numValue <= 0
+              actionDisabled || (!allowZero && numValue <= 0)
                 ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed shadow-none'
                 : 'bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white shadow-[#ff5a1f]/25 cursor-pointer'
             }`}

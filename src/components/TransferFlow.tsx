@@ -1,4 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
+import { transferAmount } from '@dynamic-labs-sdk/client';
+import type { SolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 import {
   ArrowLeft,
   ArrowRight,
@@ -15,15 +17,23 @@ import {
 } from 'lucide-react';
 import { Keypad } from './Keypad';
 import { CoinIcon } from './CoinIcon';
-import { Contact, Transaction } from '../types/wallet';
-import { INITIAL_CONTACTS, INITIAL_USER } from '../data/mockData';
-import { chain, type TokenAsset, type Address, type Reference } from '../adapters';
+import { Transaction } from '../types/wallet';
+import { dynamicClient } from '../dynamicClient';
+import {
+  assetBySymbol,
+  chain,
+  type Address,
+  type TokenAsset,
+} from '../adapters';
+import { createWebPaymentUrl } from '../services/webPaymentLink';
 
 interface TransferFlowProps {
   balance: number;
+  balanceError?: string | null;
+  balanceLoading?: boolean;
+  solanaWallet?: SolanaWalletAccount;
   onClose: () => void;
   onTransferComplete: (transaction: Transaction) => void;
-  onReceivePayment?: (transaction: Transaction) => void;
   initialMode?: 'send' | 'payment_link';
   initialRecipient?: string;
   onSubflowChange?: (inSubflow: boolean) => void;
@@ -31,9 +41,11 @@ interface TransferFlowProps {
 
 export const TransferFlow: React.FC<TransferFlowProps> = ({
   balance,
+  balanceError,
+  balanceLoading = false,
+  solanaWallet,
   onClose,
   onTransferComplete,
-  onReceivePayment,
   initialMode = 'send',
   initialRecipient,
   onSubflowChange,
@@ -54,22 +66,24 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   }, [subflow, onSubflowChange]);
 
   // Send P2P state
-  const [recipient, setRecipient] = useState<string>(initialRecipient || '@benja_munoz');
-  const [recipientName, setRecipientName] = useState<string>('Benjamín Muñoz');
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [sendAmountStr, setSendAmountStr] = useState<string>('30');
-  const [note, setNote] = useState<string>('Almuerzo de trabajo');
+  const [recipient, setRecipient] = useState<string>(initialRecipient || '');
+  const [recipientName, setRecipientName] = useState<string>(initialRecipient || '');
+  const [recipientSolanaAddress, setRecipientSolanaAddress] = useState<string | null>(
+    initialRecipient && chain.isBase58(initialRecipient) ? initialRecipient : null
+  );
+  const [searchQuery, setSearchQuery] = useState<string>(initialRecipient || '');
+  const [sendAmountStr, setSendAmountStr] = useState<string>('0');
+  const [note, setNote] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [submittedSignature, setSubmittedSignature] = useState<string | null>(null);
 
   // Payment Link state
-  const [linkAmountStr, setLinkAmountStr] = useState<string>('45');
-  const [concept, setConcept] = useState<string>('Servicios de Diseño & UX');
-  const [clientPayerName, setClientPayerName] = useState<string>('Startup LatAm Inc.');
+  const [linkAmountStr, setLinkAmountStr] = useState<string>('0');
+  const [concept, setConcept] = useState<string>('');
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
-  const [isSimulatingPayment, setIsSimulatingPayment] = useState<boolean>(false);
-  const [simulatedPaymentSuccess, setSimulatedPaymentSuccess] = useState<boolean>(false);
   const [qrGenerated, setQrGenerated] = useState<boolean>(false);
-  const [paymentRequest, setPaymentRequest] = useState<{ url: string; qrSvg: string; qrDataUrl: string; reference: Reference } | null>(null);
+  const [paymentRequest, setPaymentRequest] = useState<{ url: string; qrDataUrl: string } | null>(null);
   const [generatingQR, setGeneratingQR] = useState<boolean>(false);
   const [qrError, setQrError] = useState<string | null>(null);
 
@@ -77,199 +91,160 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   const isSendOverBalance = sendAmount > balance;
 
   const linkAmount = parseFloat(linkAmountStr) || 0;
-  const paymentLinkUrl = `https://mozaik.money/pay/${INITIAL_USER.handle}/${
-    linkAmount > 0 ? `${linkAmount}usdc` : 'open'
-  }`;
+  const paymentAsset = assetBySymbol('USDC', chain.network().cluster);
 
-  // USDC devnet asset for payment requests
-  const usdcDevnet: TokenAsset = {
-    symbol: 'USDC',
-    mint: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU' as any,
-    program: 'spl-token',
-    decimals: 6,
-  };
+  const merchantWallet = solanaWallet?.address as Address | undefined;
 
-  // Merchant wallet from env (the wallet that receives payments)
-  const merchantWallet = ((import.meta.env.VITE_MERCHANT_WALLET as string) ||
-    '7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU') as Address;
-
-  const filteredContacts = INITIAL_CONTACTS.filter(
-    (c) =>
-      c.handle.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      c.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const handleSelectContact = async (contact: Contact) => {
-    setRecipient(contact.handle);
-    setRecipientName(contact.name);
-    setRecipientValidation(null);
-    
-    // Validate recipient address if available
-    if (contact.address && chain.isLive()) {
-      try {
-        const result = await chain.verifyRecipient(contact.address as any, usdcDevnet);
-        setRecipientValidation({ ok: result.ok, reason: result.reason || undefined });
-        if (!result.ok) {
-          // Still allow navigation but show warning
-          console.warn('Recipient validation failed:', result.reason);
-        }
-      } catch (error) {
-        console.error('Recipient validation error:', error);
-      }
-    }
-    setSubflow('amount');
-  };
-
-  const handleCustomRecipient = () => {
+  const handleCustomRecipient = async () => {
     if (!searchQuery.trim()) return;
-    const cleanHandle = searchQuery.startsWith('@') ? searchQuery : `@${searchQuery}`;
-    setRecipient(cleanHandle);
-    setRecipientName(cleanHandle.replace('@', ''));
+    setSendError(null);
+
+    const address = searchQuery.trim();
+    if (!chain.isBase58(address)) {
+      setSendError('Ingresa una dirección pública Solana válida para enviar USDC.');
+      return;
+    }
+
+    if (!paymentAsset) {
+      setSendError(`USDC no está configurado para ${chain.network().cluster}.`);
+      return;
+    }
+
+    try {
+      const result = await chain.verifyRecipient(address as Address, paymentAsset);
+      setRecipientValidation({ ok: result.ok, reason: result.reason || undefined });
+      if (!result.ok) {
+        setSendError(result.reason ?? 'La dirección no puede recibir USDC.');
+        return;
+      }
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+
+    setRecipient(address);
+    setRecipientName(address);
+    setRecipientSolanaAddress(address);
     setSubflow('amount');
   };
 
-  const handleExecuteSend = () => {
+  const handleExecuteSend = async () => {
+    setSendError(null);
+
+    if (!solanaWallet) {
+      setSendError('No se encontró la wallet Solana creada para esta cuenta.');
+      return;
+    }
+    if (balanceLoading || balanceError) {
+      setSendError(balanceError ?? 'Espera a que se lea el balance de la wallet Solana.');
+      return;
+    }
+    if (isSendOverBalance) {
+      setSendError('El monto supera el balance USDC disponible en esta wallet.');
+      return;
+    }
+    if (!recipientSolanaAddress || !paymentAsset) {
+      setSendError('Selecciona una wallet Solana válida para recibir el envío.');
+      return;
+    }
+
     setIsSending(true);
-    setTimeout(() => {
-      setIsSending(false);
-      const newTx: Transaction = {
+    try {
+      const recipientCheck = await chain.verifyRecipient(
+        recipientSolanaAddress as Address,
+        paymentAsset
+      );
+      if (!recipientCheck.ok) {
+        throw new Error(recipientCheck.reason ?? 'La dirección no puede recibir USDC.');
+      }
+      setRecipientValidation({ ok: true, reason: undefined });
+
+      const { transactionHash } = await transferAmount({
+        walletAccount: solanaWallet,
+        amount: sendAmount.toFixed(paymentAsset.decimals),
+        recipient: recipientSolanaAddress,
+        token: {
+          address: paymentAsset.mint,
+          decimals: paymentAsset.decimals,
+        },
+      }, dynamicClient);
+      setSubmittedSignature(transactionHash);
+      onTransferComplete({
         id: `tx-${Date.now()}`,
-        title: recipient,
-        counterparty: recipient,
+        title: recipientName,
+        counterparty: recipientSolanaAddress,
         type: 'sent',
-        status: 'completed',
+        status: 'in_progress',
         amount: sendAmount,
         fiatAmount: sendAmount,
         fiatCurrency: 'USD',
         timestamp: 'Just now',
         date: new Date(),
-        method: 'Mozaik Instant P2P',
-        referenceId: `MOZ-${Math.floor(1000000 + Math.random() * 9000000)}`,
-        note: note || 'Transferencia entre usuarios Mozaik',
-      };
-      onTransferComplete(newTx);
+        method: `Solana ${paymentAsset.symbol}`,
+        referenceId: transactionHash,
+        note: note || 'Transferencia firmada por tu wallet Solana',
+        txHash: transactionHash,
+        walletAddress: solanaWallet.address,
+      });
       setSubflow('success');
-    }, 1600);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSending(false);
+    }
   };
 
-  const handleCopyLink = () => {
-    if (paymentRequest) {
+  const handleCopyLink = async () => {
+    if (!paymentRequest) return;
+    try {
+      if (!navigator.clipboard) throw new Error('El navegador no permite copiar el enlace.');
+      await navigator.clipboard.writeText(paymentRequest.url);
       setCopiedLink(true);
-      navigator.clipboard?.writeText(paymentRequest.url);
       setTimeout(() => setCopiedLink(false), 2000);
+    } catch (error) {
+      setQrError(error instanceof Error ? error.message : String(error));
     }
   };
 
   const handleShareWhatsApp = () => {
+    if (!paymentRequest) return;
     const text = encodeURIComponent(
-      `Hola! Te comparto mi enlace de cobro de Mozaik para ${concept} por Ⓢ ${linkAmount} USDC: ${paymentLinkUrl}`
+      `Hola! Te comparto mi solicitud Solana Pay para ${concept}${linkAmount > 0 ? ` por ${linkAmount} USDC` : ''}: ${paymentRequest.url}`
     );
     window.open(`https://wa.me/?text=${text}`, '_blank');
-  };
-
-  const handleSimulateClientPay = () => {
-    setIsSimulatingPayment(true);
-    setTimeout(() => {
-      setIsSimulatingPayment(false);
-      setSimulatedPaymentSuccess(true);
-
-      const newTx: Transaction = {
-        id: `tx-${Date.now()}`,
-        title: `Cobro: ${concept}`,
-        counterparty: clientPayerName,
-        type: 'received',
-        status: 'completed',
-        amount: linkAmount,
-        fiatAmount: linkAmount,
-        fiatCurrency: 'USD',
-        timestamp: 'Just now',
-        date: new Date(),
-        method: 'Mozaik Payment Link',
-        referenceId: `PAY-${Math.floor(100000 + Math.random() * 900000)}`,
-        note: `Cobro pagado por ${clientPayerName}`,
-      };
-
-      if (onReceivePayment) {
-        onReceivePayment(newTx);
-      }
-    }, 2000);
   };
 
   const handleGenerateQR = async () => {
     setGeneratingQR(true);
     setQrError(null);
     try {
-      const reference = chain.generateReference();
-      const amount = linkAmount > 0
-        ? { base: BigInt(Math.round(linkAmount * 1_000_000)), decimals: 6, ui: linkAmount }
-        : null;
-      const result = await chain.createPaymentRequest({
+      if (!concept.trim()) {
+        throw new Error('Ingresa un concepto para la solicitud.');
+      }
+      if (!paymentAsset) {
+        throw new Error(`USDC no está configurado para ${chain.network().cluster}.`);
+      }
+      if (!merchantWallet) {
+        throw new Error('No se encontró la wallet Solana creada para recibir el pago.');
+      }
+      const url = createWebPaymentUrl({
         recipient: merchantWallet,
-        amount,
-        asset: linkAmount > 0 ? usdcDevnet : null,
-        reference,
-        label: 'ReWallet',
+        amount: linkAmount > 0 ? linkAmount : null,
+        mint: paymentAsset.mint,
+        cluster: chain.network().cluster,
         message: concept,
-        memo: clientPayerName,
-      });
-      setPaymentRequest({ ...result, reference });
+      }, import.meta.env.VITE_PUBLIC_APP_URL?.trim() || window.location.origin);
+      const qrDataUrl = await chain.renderQrDataUrl(url);
+      setPaymentRequest({ url, qrDataUrl });
       setQrGenerated(true);
     } catch (error) {
-      setQrError((error as Error).message);
+      setQrError(error instanceof Error ? error.message : String(error));
     } finally {
       setGeneratingQR(false);
     }
   };
 
-  // Payment verification
-  const [verifyingPayment, setVerifyingPayment] = useState<{ reference: Reference; asset: TokenAsset } | null>(null);
-  const [verificationResult, setVerificationResult] = useState<{ ok: boolean; status: string; reason?: string } | null>(null);
   const [recipientValidation, setRecipientValidation] = useState<{ ok: boolean; reason?: string } | null>(null);
-
-  const verifyPaymentForReference = useCallback(async (reference: Reference, asset: TokenAsset) => {
-    setVerifyingPayment({ reference, asset });
-    setVerificationResult(null);
-    try {
-      const result = await chain.verifyPayment(reference, asset, merchantWallet as any);
-      setVerificationResult({ ok: result.ok, status: result.ok ? 'confirmed' : result.status, reason: 'ok' in result ? undefined : (result as any).reason });
-      if (result.ok && onReceivePayment) {
-        const newTx: Transaction = {
-          id: `tx-${Date.now()}`,
-          title: `Cobro: ${concept}`,
-          counterparty: clientPayerName,
-          type: 'received',
-          status: 'completed',
-          amount: Number(result.receipt.amount.ui.toFixed(2)),
-          fiatAmount: Number(result.receipt.amount.ui.toFixed(2)),
-          fiatCurrency: 'USD',
-          timestamp: 'Just now',
-          date: new Date(),
-          method: 'Solana Pay',
-          referenceId: reference,
-          note: `Cobro verificado on-chain`,
-          txHash: result.receipt.signature,
-        };
-        onReceivePayment(newTx);
-      }
-    } catch (error) {
-      setVerificationResult({ ok: false, status: 'failed', reason: (error as Error).message });
-    } finally {
-      setVerifyingPayment(null);
-    }
-  }, [concept, clientPayerName, onReceivePayment]);
-
-  const handleVerifyPayment = () => {
-    if (paymentRequest) {
-      verifyPaymentForReference(paymentRequest.reference, usdcDevnet);
-    }
-  };
-
-  const handleResetPaymentLink = () => {
-    setQrGenerated(false);
-    setSimulatedPaymentSuccess(false);
-    setCopiedLink(false);
-    setSubflow('link_amount');
-  };
 
   // 1. AMOUNT KEYPAD FOR SENDING
   if (subflow === 'amount') {
@@ -280,10 +255,15 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           value={sendAmountStr}
           onChange={setSendAmountStr}
           actionLabel={isSendOverBalance ? 'Saldo Insuficiente' : 'Continuar a Confirmar'}
-          actionDisabled={isSendOverBalance || sendAmount <= 0}
+          actionDisabled={isSendOverBalance || sendAmount <= 0 || balanceLoading || Boolean(balanceError)}
           onAction={() => setSubflow('confirm')}
           onBack={() => setSubflow('main')}
           title={`Enviar a ${recipient}`}
+          subtitle={
+            balanceLoading
+              ? 'Consultando saldo real de la wallet…'
+              : balanceError ?? undefined
+          }
         />
       </div>
     );
@@ -365,32 +345,42 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
 
             <div className="pt-2 text-xs text-zinc-400 space-y-1">
               <div className="flex justify-between">
-                <span>Comisión de Envío</span>
-                <span className="text-[#26e5c8] font-semibold">$0.00 (Gratis)</span>
+                <span>Comisión de red</span>
+                <span className="text-zinc-300 font-medium">Se paga en SOL</span>
               </div>
               <div className="flex justify-between">
-                <span>Velocidad de Acreditación</span>
-                <span className="text-white font-medium">Inmediata (0 segundos)</span>
+                <span>Liquidación</span>
+                <span className="text-zinc-300 font-medium">Solana</span>
               </div>
             </div>
           </div>
         </div>
 
         <div className="pt-4 pb-2">
+          <p className="text-xs text-amber-300 text-center mb-3">
+            Tu wallet Solana {solanaWallet?.address.slice(0, 6)}…{solanaWallet?.address.slice(-4)} firmará este envío. Asegúrate de tener saldo USDC y SOL para la comisión.
+          </p>
+          {sendError && (
+            <p role="alert" className="text-xs text-red-400 text-center mb-3">
+              {sendError}
+            </p>
+          )}
           <button
             onClick={handleExecuteSend}
-            disabled={isSending}
-            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer transition-all"
+            disabled={isSending || isSendOverBalance || balanceLoading || Boolean(balanceError) || !solanaWallet || !recipientSolanaAddress || recipientValidation?.ok === false}
+            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] disabled:bg-zinc-800 disabled:text-zinc-500 active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer disabled:cursor-not-allowed transition-all"
           >
             {isSending ? (
               <>
                 <Loader2 className="w-5 h-5 animate-spin" />
-                <span>Enviando al instante...</span>
+                <span>Firmando y enviando...</span>
               </>
             ) : (
               <>
                 <Send className="w-4 h-4" />
-                <span>Confirmar y Enviar Ⓢ {sendAmount.toFixed(2)}</span>
+                <span>
+                {`Firmar y enviar · ${sendAmount.toFixed(2)} USDC`}
+                </span>
               </>
             )}
           </button>
@@ -409,10 +399,10 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           </div>
 
           <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">
-            ¡Transferencia Enviada!
+            Envío enviado a Solana
           </h2>
           <p className="text-sm text-zinc-400 mb-6">
-            {recipient} ya tiene disponibles los dólares digitales en su cuenta.
+            La transacción fue firmada con tu wallet Solana creada por Dynamic. Espera la confirmación de la red.
           </p>
 
           <div className="w-full max-w-xs p-4 rounded-2xl bg-[#1e1e21] border border-white/5 mb-4 text-left space-y-2">
@@ -429,9 +419,19 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               <span className="text-zinc-300">{note}</span>
             </div>
             <div className="flex justify-between text-xs pt-1 border-t border-white/5">
-              <span className="text-zinc-400">Comisión</span>
-              <span className="text-[#26e5c8] font-bold">0.00 USDC</span>
+              <span className="text-zinc-400">Estado</span>
+              <span className="text-[#26e5c8] font-bold">Firmado · enviado a Solana</span>
             </div>
+            {submittedSignature && (
+              <a
+                href={chain.explorerTxUrl(submittedSignature)}
+                target="_blank"
+                rel="noreferrer"
+                className="block break-all pt-1 text-xs text-[#26e5c8] underline"
+              >
+                Ver firma de transacción
+              </a>
+            )}
           </div>
         </div>
 
@@ -456,10 +456,14 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           value={linkAmountStr}
           onChange={setLinkAmountStr}
           actionLabel="Continuar a Detalles"
+          showBalance={false}
+          showPresets={false}
+          allowZero
           onAction={() => {
             setQrGenerated(false);
-            setSimulatedPaymentSuccess(false);
             setCopiedLink(false);
+            setPaymentRequest(null);
+            setQrError(null);
             setSubflow('link_details');
           }}
           onBack={() => setSubflow('main')}
@@ -478,8 +482,9 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             <button
               onClick={() => {
                 setQrGenerated(false);
-                setSimulatedPaymentSuccess(false);
                 setCopiedLink(false);
+                setPaymentRequest(null);
+                setQrError(null);
                 setSubflow('link_amount');
               }}
               className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
@@ -509,52 +514,50 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               <input
                 type="text"
                 value={concept}
-                onChange={(e) => setConcept(e.target.value)}
+                onChange={(e) => {
+                  setConcept(e.target.value);
+                  setQrGenerated(false);
+                  setPaymentRequest(null);
+                }}
                 placeholder="Ej. Honorarios diseño, consultoría, cuota..."
                 className="w-full h-12 px-3.5 rounded-xl bg-[#1e1e21] border border-white/10 text-white text-sm focus:outline-none focus:border-[#ff5a1f]"
               />
             </div>
 
-            <div>
-              <label className="text-xs font-medium text-zinc-400 block mb-1.5">
-                Cliente o empresa a cobrar (referencia)
-              </label>
-              <input
-                type="text"
-                value={clientPayerName}
-                onChange={(e) => setClientPayerName(e.target.value)}
-                placeholder="Nombre del pagador..."
-                className="w-full h-12 px-3.5 rounded-xl bg-[#1e1e21] border border-white/10 text-white text-sm focus:outline-none focus:border-[#ff5a1f]"
-              />
-            </div>
+            {qrError && (
+              <p role="alert" className="text-xs text-red-400 text-center">{qrError}</p>
+            )}
 
-            {/* Generar button - ORANGE */}
             {!qrGenerated && (
               <div className="pt-2">
                 <button
                   onClick={handleGenerateQR}
+                  disabled={generatingQR}
                   className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer transition-all"
                 >
-                  <Sparkles className="w-4 h-4" />
-                  <span>Generar</span>
+                  {generatingQR ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                  <span>{generatingQR ? 'Generando solicitud...' : 'Confirmar'}</span>
                 </button>
               </div>
             )}
 
             {/* QR Generated Section - Appears below inputs in SAME screen */}
-            {qrGenerated && !simulatedPaymentSuccess && paymentRequest && (
+            {qrGenerated && paymentRequest && (
               <div className="space-y-4 animate-in slide-in-from-top-2 duration-300">
-                {/* Real QR Code Card */}
                 <div className="p-4 rounded-3xl bg-white text-black max-w-[240px] mx-auto my-2 shadow-xl flex flex-col items-center">
                   <div className="w-full flex items-center justify-between pb-2 border-b border-zinc-200 text-xs">
-                    <span className="font-bold tracking-tight text-zinc-900">{INITIAL_USER.handle}</span>
-                    <span className="font-semibold text-[#ff5a1f]">Ⓢ {linkAmount.toFixed(2)}</span>
+                    <span className="font-bold tracking-tight text-zinc-900">ReWallet · Solana</span>
+                    <span className="font-semibold text-[#ff5a1f]">
+                      {linkAmount > 0 ? `${linkAmount.toFixed(2)} USDC` : 'Monto libre · USDC'}
+                    </span>
                   </div>
 
                   <div className="w-56 h-56 bg-white p-2 my-2 flex items-center justify-center">
-                    <div dangerouslySetInnerHTML={{
-                      __html: paymentRequest.qrSvg
-                    }} />
+                    <img
+                      src={paymentRequest.qrDataUrl}
+                      alt="QR de la página web para pagar esta solicitud"
+                      className="block w-full h-full object-contain"
+                    />
                   </div>
 
                   <p className="text-[11px] font-medium text-zinc-600 truncate max-w-full">
@@ -565,7 +568,20 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                   )}
                 </div>
 
-                {/* Share Options Strip - Only Copy + WhatsApp */}
+                <div className="p-3 rounded-xl bg-[#1e1e21] border border-white/5">
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-1">
+                    Link web de pago · {chain.describeNetwork()}
+                  </p>
+                  <a
+                    href={paymentRequest.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block break-all text-[11px] text-[#26e5c8] underline"
+                  >
+                    {paymentRequest.url}
+                  </a>
+                </div>
+
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={handleCopyLink}
@@ -583,89 +599,12 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                   </button>
                 </div>
 
-                {/* Simular Pago */}
-                <div className="mt-4 p-3 rounded-xl bg-[#ff5a1f]/10 border border-[#ff5a1f]/30">
-                  <button
-                    onClick={handleSimulateClientPay}
-                    disabled={isSimulatingPayment}
-                    className="w-full py-2.5 px-3 rounded-lg bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
-                  >
-                    {isSimulatingPayment ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Simulando pago de cliente en vivo...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles className="w-4 h-4" />
-                        <span>Simular pago de cliente ahora</span>
-                      </>
-                    )}
-                  </button>
+                <div className="mt-2 p-3 rounded-xl bg-[#26e5c8]/10 border border-[#26e5c8]/30">
+                    <p className="text-[11px] text-zinc-300 mb-2 text-center">
+                      Comparte el enlace o escanea el QR para abrir esta página desde la cuenta pagadora. Allí podrá revisar la solicitud y firmar el pago con su wallet Solana.
+                    </p>
                 </div>
 
-                {/* Verify Payment (Real Chain Verification) */}
-                {paymentRequest && (
-                  <div className="mt-2 p-3 rounded-xl bg-[#26e5c8]/10 border border-[#26e5c8]/30">
-                    <button
-                      onClick={handleVerifyPayment}
-                      disabled={verifyingPayment !== null}
-                      className="w-full py-2.5 px-3 rounded-lg bg-[#26e5c8] hover:bg-[#36f5d8] text-black text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
-                    >
-                      {verifyingPayment ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          <span>Verificando en la cadena...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Search className="w-4 h-4" />
-                          <span>Verificar pago en devnet</span>
-                        </>
-                      )}
-                    </button>
-                    {verificationResult && (
-                      <p className={`text-xs text-center mt-2 ${verificationResult.ok ? 'text-[#26e5c8]' : 'text-red-400'}`}>
-                        {verificationResult.ok
-                          ? `Pago confirmado: ${verificationResult.status}`
-                          : `Error: ${verificationResult.reason || verificationResult.status}`}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {/* No buttons here - Editar and Ir a Inicio removed as requested */}
-              </div>
-            )}
-
-            {/* SUCCESS STATE - Only shows after simulated payment */}
-            {qrGenerated && simulatedPaymentSuccess && (
-              <div className="space-y-6 animate-in fade-in duration-300">
-                {/* Cobro Recibido - Centered */}
-                <div className="text-center animate-in fade-in duration-300">
-                  <div className="w-16 h-16 rounded-full bg-[#10b981] text-black flex items-center justify-center mx-auto mb-4">
-                    <CheckCircle2 className="w-8 h-8 stroke-[2.5]" />
-                  </div>
-                  <h2 className="text-xl font-bold text-white mb-2">¡Cobro Recibido!</h2>
-                  <p className="text-sm text-zinc-300 mb-1">
-                    {clientPayerName} pagó Ⓢ {linkAmount.toFixed(2)}
-                  </p>
-                  <p className="text-xs text-zinc-400 mb-4">
-                    por "{concept}"
-                  </p>
-                  <div className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#10b981]/20 border border-[#10b981]/30">
-                    <span className="text-xs font-semibold text-[#26e5c8]">+Ⓢ {linkAmount.toFixed(2)}</span>
-                    <span className="text-xs text-zinc-300">acreditados</span>
-                  </div>
-                </div>
-
-                {/* Solo Ir a Inicio - Orange full width */}
-                <button
-                  onClick={handleResetPaymentLink}
-                  className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer transition-all"
-                >
-                  <span>Ir a Inicio</span>
-                </button>
               </div>
             )}
           </div>
@@ -692,61 +631,48 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
 
         <div className="mb-4">
           <label className="text-[14px] font-semibold text-zinc-300 block mb-2">
-            Para
+            Dirección Solana de destino
           </label>
           <div className="w-full h-12 rounded-2xl bg-white flex items-center px-4 shadow-sm">
             <Search className="w-5 h-5 text-zinc-600 mr-2.5 shrink-0" />
             <input
               type="text"
-              placeholder="Search by username"
+              placeholder="Pega una dirección pública Solana"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSendError(null);
+              }}
               onKeyDown={(e) => e.key === 'Enter' && handleCustomRecipient()}
-              className="w-full bg-transparent text-black text-sm placeholder:text-zinc-500 font-normal outline-none"
+              className="w-full bg-transparent text-black text-xs font-mono placeholder:text-zinc-500 placeholder:font-sans placeholder:text-sm font-normal outline-none"
             />
             {searchQuery.trim().length > 0 && (
               <button
                 onClick={handleCustomRecipient}
                 className="px-2.5 py-1 rounded-lg bg-[#ff5a1f] text-white text-xs font-semibold shrink-0 cursor-pointer"
               >
-                Elegir
+                Continuar
               </button>
             )}
           </div>
-        </div>
-
-        <div className="mb-4">
-          <h2 className="text-[13px] font-semibold text-[#26e5c8] mb-2">
-            Recientes
-          </h2>
-
-          <div className="divide-y divide-white/[0.04]">
-            {filteredContacts.map((contact) => (
-              <button
-                key={contact.id}
-                onClick={() => handleSelectContact(contact)}
-                className="w-full flex items-center py-3 px-1 hover:bg-white/[0.03] active:bg-white/[0.06] rounded-xl transition-colors text-left group cursor-pointer"
-              >
-                <div
-                  className={`w-10 h-10 rounded-full ${contact.avatarBg} flex items-center justify-center text-white text-sm font-bold shrink-0 mr-3.5 shadow-sm transition-transform group-hover:scale-105`}
-                >
-                  <span className="select-none">◡̈</span>
-                </div>
-                <span className="text-[15px] font-semibold text-white tracking-tight leading-snug">
-                  {contact.handle}
-                </span>
-              </button>
-            ))}
-          </div>
+          {sendError && (
+            <p role="alert" className="mt-2 text-xs text-red-400">{sendError}</p>
+          )}
+          <p className="mt-2 text-[11px] text-zinc-500">
+            El envío se firmará desde {solanaWallet?.address.slice(0, 6)}…{solanaWallet?.address.slice(-4)} en {chain.describeNetwork()}.
+          </p>
         </div>
 
         <div className="mb-3 mt-4">
-          <h2 className="text-[13px] font-semibold text-[#26e5c8] mb-2.5">
-            O
-          </h2>
-
           <button
-            onClick={() => setSubflow('link_amount')}
+            onClick={() => {
+              setLinkAmountStr('0');
+              setConcept('');
+              setQrGenerated(false);
+              setPaymentRequest(null);
+              setQrError(null);
+              setSubflow('link_amount');
+            }}
             className="w-full p-4 rounded-2xl bg-[#1e1e21] hover:bg-[#252529] active:bg-[#2b2b30] flex items-center justify-between transition-all border border-white/[0.04] text-left group cursor-pointer"
           >
             <div className="flex items-center gap-3.5">

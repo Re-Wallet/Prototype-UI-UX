@@ -220,6 +220,7 @@ export interface TokenAsset {
 
 export type PaymentErrorCode =
   | 'invalid-address'
+  | 'invalid-amount'
   | 'unsupported-mint'
   | 'mint-mismatch'
   | 'insufficient-balance'

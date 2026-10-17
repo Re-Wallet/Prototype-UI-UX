@@ -81,7 +81,11 @@ interface ParsedTokenBalanceEntry {
   accountIndex: number;
   mint?: string | null;
   owner?: string | null;
-  uiTokenAmount?: { amount?: string | null; decimals?: number; uiAmount?: number | null };
+  uiTokenAmount?: {
+    amount?: string | null;
+    decimals?: number;
+    uiAmount?: number | null;
+  };
 }
 
 interface ParsedTransactionResult {
@@ -94,7 +98,10 @@ interface ParsedTransactionResult {
     postTokenBalances?: ParsedTokenBalanceEntry[];
   } | null;
   transaction?: {
-    message?: { instructions?: Array<Record<string, unknown>> };
+    message?: {
+      accountKeys?: Array<string | { pubkey?: string }>;
+      instructions?: Array<Record<string, unknown>>;
+    };
   };
 }
 
@@ -152,15 +159,21 @@ async function inspectTransaction(
   const meta = tx.meta;
   const pre = meta?.preTokenBalances ?? [];
   const post = meta?.postTokenBalances ?? [];
+  const accountKeys = tx.transaction?.message?.accountKeys ?? [];
 
   const findForAta = (
     entries: ParsedTokenBalanceEntry[]
-  ): { amount: bigint; mint: string | null } | null => {
-    const entry = entries.find((b) => String(b.owner) === String(watchedAta));
+  ): { amount: bigint; mint: string | null; decimals: number | null } | null => {
+    const entry = entries.find((balance) => {
+      const accountKey = accountKeys[balance.accountIndex];
+      const address = typeof accountKey === 'string' ? accountKey : accountKey?.pubkey;
+      return address === watchedAta;
+    });
     if (!entry) return null;
     return {
       amount: BigInt(entry.uiTokenAmount?.amount ?? '0'),
       mint: entry.mint ? String(entry.mint) : null,
+      decimals: entry.uiTokenAmount?.decimals ?? null,
     };
   };
 
@@ -172,7 +185,9 @@ async function inspectTransaction(
   const delta = (after?.amount ?? 0n) - (before?.amount ?? 0n);
   if (delta === 0n) return null;
 
-  const mint = (after?.mint ?? before?.mint ?? asset.mint) as Address;
+  const mint = after?.mint ?? before?.mint;
+  const decimals = after?.decimals ?? before?.decimals;
+  if (mint === null || decimals !== asset.decimals) return null;
 
   // The counterparty is whichever other account moved in the opposite
   // direction by the same amount.
@@ -197,7 +212,7 @@ async function inspectTransaction(
     slot: tx.slot != null ? Number(tx.slot) || null : null,
     commitment: normaliseCommitment(meta?.confirmationStatus),
     delta,
-    mint,
+    mint: mint as Address,
     counterparty,
     memo: extractMemo(tx as never),
     blockTime: meta?.blockTime ? Number(meta.blockTime) : null,
@@ -214,6 +229,7 @@ export interface ReferenceHit {
   slot: number | null;
   blockTime: number | null;
   error: boolean;
+  commitment: Commitment | null;
 }
 
 /**
@@ -229,23 +245,20 @@ export async function findReferenceTransactions(
 ): Promise<ReferenceHit[]> {
   const { limit = 10, before } = options;
 
-  try {
-    const signatures = await rpc()
-      .getSignaturesForAddress(reference as never, {
-        limit,
-        ...(before ? { before: before as never } : {}),
-      })
-      .send();
+  const signatures = await rpc()
+    .getSignaturesForAddress(reference as never, {
+      limit,
+      ...(before ? { before: before as never } : {}),
+    })
+    .send();
 
-    return signatures.map((entry) => ({
-      signature: String(entry.signature) as Signature,
-      slot: typeof entry.slot === 'number' ? entry.slot : Number(entry.slot ?? 0) || null,
-      blockTime: entry.blockTime ? Number(entry.blockTime) : null,
-      error: Boolean(entry.err),
-    }));
-  } catch {
-    return [];
-  }
+  return signatures.map((entry) => ({
+    signature: String(entry.signature) as Signature,
+    slot: typeof entry.slot === 'number' ? entry.slot : Number(entry.slot ?? 0) || null,
+    blockTime: entry.blockTime ? Number(entry.blockTime) : null,
+    error: Boolean(entry.err),
+    commitment: normaliseCommitment(String(entry.confirmationStatus ?? '')),
+  }));
 }
 
 // ============================================================================
@@ -269,6 +282,15 @@ export async function verifyPayment(
   recipient: Address
 ): Promise<VerifyPaymentResult> {
   const required = request.requireCommitment ?? 'confirmed';
+  if (
+    request.expectedAmount &&
+    (request.expectedAmount.base <= 0n || request.expectedAmount.decimals !== asset.decimals)
+  ) {
+    throw new PaymentError(
+      'invalid-amount',
+      'Expected payment amount must be positive and use the asset decimals'
+    );
+  }
 
   const hits = await findReferenceTransactions(request.reference, { limit: 5 });
   const successful = hits.filter((hit) => !hit.error);
@@ -283,13 +305,17 @@ export async function verifyPayment(
     };
   }
 
-  const ata = await deriveAta(recipient, asset);
+  const expectedRecipient = request.expectedRecipient ?? recipient;
+  const ata = await deriveAta(expectedRecipient, asset);
+  let missingCounterparty = false;
 
   for (const hit of successful) {
     const parsed = await inspectTransaction(hit.signature, ata, asset);
     if (!parsed) continue;
 
-    const commitment = parsed.commitment ?? 'processed';
+    if (parsed.error) continue;
+
+    const commitment = hit.commitment ?? parsed.commitment ?? 'processed';
     if (!meetsCommitment(commitment, required)) {
       return {
         ok: false,
@@ -299,7 +325,7 @@ export async function verifyPayment(
     }
 
     // Anyone can create a token with the ticker "USDC", so compare the mint.
-    if (parsed.mint && parsed.mint !== asset.mint) {
+    if (parsed.mint !== asset.mint) {
       throw new PaymentError('mint-mismatch', 'Payment used an unexpected mint', {
         expected: asset.mint,
         observed: parsed.mint,
@@ -320,6 +346,10 @@ export async function verifyPayment(
         reason: `Underpaid: expected ${request.expectedAmount.base} base units, received ${parsed.delta}`,
       };
     }
+    if (!parsed.counterparty) {
+      missingCounterparty = true;
+      continue;
+    }
 
     const receipt: PaymentReceipt = {
       intentId: null,
@@ -328,7 +358,7 @@ export async function verifyPayment(
       status: commitment as PaymentReceipt['status'],
       direction: 'incoming',
       amount,
-      counterparty: (parsed.counterparty ?? ('11111111111111111111111111111111' as Address)) as Address,
+      counterparty: parsed.counterparty,
       memo: parsed.memo,
       slot: parsed.slot,
       verifiedAt: new Date().toISOString(),
@@ -340,7 +370,9 @@ export async function verifyPayment(
   return {
     ok: false,
     status: 'pending',
-    reason: 'Reference found but no matching credit to the recipient account',
+    reason: missingCounterparty
+      ? 'Payment credit found, but the payer account could not be verified'
+      : 'Reference found but no matching credit to the recipient account',
   };
 }
 
@@ -490,20 +522,16 @@ function decodeTokenAmount(base64: string): bigint | null {
 export async function getTransactionStatus(
   signature: string
 ): Promise<{ commitment: Commitment | null; error: boolean; slot: number | null }> {
-  try {
-    const result = await rpc().getSignatureStatuses([signature as never]).send();
-    const entry = result.value[0];
+  const result = await rpc().getSignatureStatuses([signature as never]).send();
+  const entry = result.value[0];
 
-    if (!entry) return { commitment: null, error: false, slot: null };
+  if (!entry) return { commitment: null, error: false, slot: null };
 
-    return {
-      commitment: normaliseCommitment(String(entry.confirmationStatus ?? '')),
-      error: Boolean(entry.err),
-      slot: typeof entry.slot === 'number' ? entry.slot : null,
-    };
-  } catch {
-    return { commitment: null, error: false, slot: null };
-  }
+  return {
+    commitment: normaliseCommitment(String(entry.confirmationStatus ?? '')),
+    error: Boolean(entry.err),
+    slot: typeof entry.slot === 'number' ? entry.slot : null,
+  };
 }
 
 /** True when the signature has already been observed and recorded. */

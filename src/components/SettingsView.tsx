@@ -1,6 +1,5 @@
 import React from 'react';
-import { LogOut, User, Mail, Phone, Globe } from 'lucide-react';
-import { INITIAL_USER } from '../data/mockData';
+import { LogOut, Mail, Globe, Wallet } from 'lucide-react';
 import { Language, Translations } from '../i18n/translations';
 
 interface SettingsViewProps {
@@ -8,6 +7,8 @@ interface SettingsViewProps {
   language: Language;
   onLanguageChange: (lang: Language) => void;
   t: Translations;
+  dynamicEmail?: string;
+  solanaAddress?: string;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -15,49 +16,42 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   language,
   onLanguageChange,
   t,
+  dynamicEmail,
+  solanaAddress,
 }) => {
   return (
     <div className="px-5 pt-3 pb-28 text-white select-none">
       {/* First Div: Profile Avatar, Name, and Tag */}
       <div className="flex flex-col items-center justify-center p-6 rounded-3xl bg-[#18181b] border border-white/5 mb-5 text-center">
         <div className="w-18 h-18 rounded-full bg-[#ff1f71] flex items-center justify-center text-white text-3xl font-bold shadow-lg shadow-[#ff1f71]/20 mb-3 select-none">
-          ◡̈
+          {dynamicEmail?.charAt(0).toUpperCase() ?? 'D'}
         </div>
         <h2 className="text-lg font-bold text-white leading-tight mb-0.5">
-          {INITIAL_USER.name}
+          Cuenta Dynamic
         </h2>
-        <span className="text-xs font-semibold text-[#ff5a1f] font-mono">
-          {INITIAL_USER.handle}
-        </span>
+        <span className="text-xs font-semibold text-[#ff5a1f] font-mono">{dynamicEmail ?? 'Email no disponible'}</span>
       </div>
 
       {/* Profile Details List */}
       <div className="rounded-2xl bg-[#18181b] border border-white/5 divide-y divide-white/5 mb-6 text-sm">
-        {/* Nombre y Apellido */}
-        <div className="p-4 flex items-center justify-between">
-          <div className="flex items-center gap-3 text-zinc-400">
-            <User className="w-4 h-4 text-zinc-400" />
-            <span className="text-xs font-medium">{t.fullName}</span>
-          </div>
-          <span className="text-xs font-semibold text-white">{INITIAL_USER.name}</span>
-        </div>
-
         {/* Correo */}
         <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3 text-zinc-400">
             <Mail className="w-4 h-4 text-zinc-400" />
             <span className="text-xs font-medium">{t.email}</span>
           </div>
-          <span className="text-xs font-semibold text-white font-mono">{INITIAL_USER.email}</span>
+          <span className="text-xs font-semibold text-white font-mono">{dynamicEmail ?? 'No disponible'}</span>
         </div>
 
-        {/* Teléfono Registro */}
-        <div className="p-4 flex items-center justify-between">
+        {/* Dynamic embedded Solana wallet */}
+        <div className="p-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 text-zinc-400">
-            <Phone className="w-4 h-4 text-zinc-400" />
-            <span className="text-xs font-medium">{t.registeredPhone}</span>
+            <Wallet className="w-4 h-4 text-[#ff5a1f]" />
+            <span className="text-xs font-medium">Solana wallet</span>
           </div>
-          <span className="text-xs font-semibold text-white font-mono">{INITIAL_USER.phone}</span>
+          <span className="max-w-[58%] truncate text-right text-xs font-semibold text-white font-mono">
+            {solanaAddress ?? 'Not connected'}
+          </span>
         </div>
 
         {/* Selector de Idiomas */}

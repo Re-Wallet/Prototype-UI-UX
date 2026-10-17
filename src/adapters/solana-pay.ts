@@ -26,6 +26,7 @@
  */
 
 import QRCode from 'qrcode';
+import { getBase58Decoder, isAddress } from '@solana/kit';
 
 import type {
   Address,
@@ -36,7 +37,6 @@ import type {
   TokenAsset,
 } from '../contracts/payments';
 import { PaymentError } from '../contracts/payments';
-import { fromBaseUnits } from '../contracts/tokens';
 
 import { network } from './solana-client';
 
@@ -54,8 +54,6 @@ const SOL_DECIMALS = 9;
 // VALIDATION
 // ============================================================================
 
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
-
 /**
  * Structural base58 check.
  *
@@ -65,12 +63,7 @@ const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvw
  * instead of a wallet that silently refuses to scan.
  */
 export function isBase58(value: string): boolean {
-  if (typeof value !== 'string') return false;
-  if (value.length < 32 || value.length > 44) return false;
-  for (const char of value) {
-    if (!BASE58_ALPHABET.includes(char)) return false;
-  }
-  return true;
+  return typeof value === 'string' && isAddress(value);
 }
 
 function assertBase58(value: string, field: string): void {
@@ -90,28 +83,28 @@ function assertBase58(value: string, field: string): void {
  * base units to avoid float drift.
  */
 export function formatSpecAmount(amount: TokenAmount, decimals: number): string {
-  const ui = fromBaseUnits(amount.base, decimals);
-
-  if (!Number.isFinite(ui) || ui < 0) {
-    throw new PaymentError('invalid-address', `Invalid amount: ${ui}`, { ui });
+  if (
+    amount.base < 0n ||
+    !Number.isInteger(decimals) ||
+    decimals < 0 ||
+    decimals > SOL_DECIMALS ||
+    amount.decimals !== decimals
+  ) {
+    throw new PaymentError('invalid-amount', 'Invalid amount or token decimals', {
+      base: amount.base.toString(),
+      amountDecimals: amount.decimals,
+      decimals,
+    });
   }
 
-  // toFixed avoids scientific notation; trim trailing zeros the spec allows.
-  const fixed = ui.toFixed(decimals);
-  const trimmed = fixed.includes('.')
-    ? fixed.replace(/0+$/, '').replace(/\.$/, '')
-    : fixed;
+  const divisor = 10n ** BigInt(decimals);
+  const whole = amount.base / divisor;
+  const fraction = (amount.base % divisor)
+    .toString()
+    .padStart(decimals, '0')
+    .replace(/0+$/, '');
 
-  if (trimmed.includes('e') || trimmed.includes('E')) {
-    throw new PaymentError('invalid-address', 'Amount must not use scientific notation');
-  }
-
-  // A value below 1 must keep its leading zero ("0.5", never ".5").
-  if (trimmed.startsWith('.')) {
-    return `0${trimmed}`;
-  }
-
-  return trimmed === '' ? '0' : trimmed;
+  return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 
 /** Number of decimals an asset supports on chain. */
@@ -230,8 +223,8 @@ export function encodeTransactionRequest(input: TransactionRequestInput): URL {
     throw new PaymentError('invalid-address', `Malformed link: ${input.link}`);
   }
 
-  if (parsed.protocol !== 'https:') {
-    throw new PaymentError('invalid-address', 'Transaction request links must use HTTPS');
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    throw new PaymentError('invalid-address', 'Transaction request links must use HTTPS without embedded credentials');
   }
 
   const hasQuery = parsed.search.length > 1;
@@ -361,9 +354,26 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
   const query = questionMark === -1 ? '' : rest.slice(questionMark + 1);
   const params = new URLSearchParams(query);
 
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+
   // A link (transaction request) starts with a scheme once decoded.
-  const decodedPath = decodeURIComponent(pathname);
   if (decodedPath.startsWith('https://') || decodedPath.startsWith('http://')) {
+    if (!decodedPath.startsWith('https://') || params.getAll('label').length > 1 || params.getAll('message').length > 1) {
+      return null;
+    }
+    try {
+      const transactionUrl = new URL(decodedPath);
+      if (transactionUrl.protocol !== 'https:' || transactionUrl.username || transactionUrl.password) {
+        return null;
+      }
+    } catch {
+      return null;
+    }
     return {
       kind: 'transaction',
       link: decodedPath,
@@ -373,20 +383,32 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
     };
   }
 
+  const singleValueParams = ['amount', 'spl-token', 'label', 'message', 'memo'];
+  if (singleValueParams.some((key) => params.getAll(key).length > 1)) return null;
+  if (singleValueParams.some((key) => params.has(key) && params.get(key) === '')) return null;
+  if (!isBase58(pathname)) return null;
+
   const amountRaw = first(params, 'amount');
   let amountUi: number | null = null;
   if (amountRaw !== null) {
+    if (!/^\d+(?:\.\d{1,9})?$/.test(amountRaw)) return null;
     const parsed = Number(amountRaw);
-    amountUi = Number.isFinite(parsed) && !amountRaw.match(/e/i) ? parsed : null;
+    if (!Number.isFinite(parsed)) return null;
+    amountUi = parsed;
   }
+
+  const splToken = first(params, 'spl-token');
+  if (splToken !== null && !isBase58(splToken)) return null;
+  const references = params.getAll('reference');
+  if (references.some((reference) => !isBase58(reference))) return null;
 
   return {
     kind: 'transfer',
     recipient: pathname as Address,
     amount: amountRaw,
     amountUi,
-    splToken: (first(params, 'spl-token') as Address | null) ?? null,
-    references: params.getAll('reference').filter(Boolean) as Reference[],
+    splToken: (splToken as Address | null) ?? null,
+    references: references as Reference[],
     label: first(params, 'label'),
     message: first(params, 'message'),
     memo: first(params, 'memo'),
@@ -397,8 +419,6 @@ export function parsePaymentRequest(input: string): ParsedPaymentRequest | null 
 // ============================================================================
 // REFERENCES
 // ============================================================================
-
-const BASE58_ALPHABET_ARRAY = BASE58_ALPHABET.split('');
 
 /**
  * Generate a reference for a new payment.
@@ -411,13 +431,7 @@ const BASE58_ALPHABET_ARRAY = BASE58_ALPHABET.split('');
 export function generateReference(): Reference {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
-
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    out += BASE58_ALPHABET_ARRAY[bytes[i] % BASE58_ALPHABET_ARRAY.length];
-  }
-  // 32 bytes base58-encode to 43-44 characters.
-  return out.slice(0, 44) as Reference;
+  return getBase58Decoder().decode(bytes) as Reference;
 }
 
 /** True when the value looks like a valid reference. */

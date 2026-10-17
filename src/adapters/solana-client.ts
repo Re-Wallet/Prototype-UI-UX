@@ -40,7 +40,9 @@ const DEFAULT_MAINNET: SolanaNetworkConfig = {
 };
 
 function envValue(key: string): string | undefined {
-  const raw = (import.meta.env as Record<string, string | undefined>)[key];
+  const raw = (
+    import.meta as ImportMeta & { env?: Record<string, string | undefined> }
+  ).env?.[key];
   const trimmed = raw?.trim();
   return trimmed ? trimmed : undefined;
 }
@@ -77,6 +79,10 @@ export function resolveNetworkConfig(): SolanaNetworkConfig {
  * below is checked, instead of degrading to `any`.
  */
 export interface PaymentRpcApi {
+  getBalance: (
+    addr: unknown,
+    config?: unknown
+  ) => { send: () => Promise<{ value: bigint }> };
   getAccountInfo: (
     addr: unknown,
     config?: unknown
@@ -84,13 +90,28 @@ export interface PaymentRpcApi {
   getTokenAccountBalance: (
     addr: unknown
   ) => { send: () => Promise<{ value: { amount: string; decimals: number; uiAmount: number | null } }> };
+  getTokenAccountsByOwner: (
+    owner: unknown,
+    filter: unknown,
+    config?: unknown
+  ) => {
+    send: () => Promise<{
+      value: Array<{ pubkey: unknown; account: { data: unknown } }>;
+    }>;
+  };
   getMinimumBalanceForRentExemption: (size: bigint) => { send: () => Promise<bigint> };
   getSignaturesForAddress: (
     addr: unknown,
     config?: unknown
   ) => {
     send: () => Promise<
-      Array<{ signature: unknown; slot: unknown; blockTime: unknown; err: unknown }>
+      Array<{
+        signature: unknown;
+        slot: unknown;
+        blockTime: unknown;
+        err: unknown;
+        confirmationStatus?: unknown;
+      }>
     >;
   };
   getTransaction: (

@@ -146,11 +146,14 @@ export const AllTransactionsModal: React.FC<AllTransactionsModalProps> = ({
 
                 <div className="text-right shrink-0">
                   <div className="flex items-center justify-end gap-1.5 text-white font-medium text-[15px] tabular-nums leading-snug">
-                    <CoinIcon className="w-4 h-4 text-zinc-400" />
+                    {tx.assetSymbol !== 'SOL' && (
+                      <CoinIcon className="w-4 h-4 text-zinc-400" />
+                    )}
                     <span>
                       {!isIncoming ? '-' : ''}
                       {tx.amount % 1 === 0 ? tx.amount : tx.amount.toFixed(2)}
                     </span>
+                    <span className="text-[11px] text-zinc-400">{tx.assetSymbol ?? 'USDC'}</span>
                   </div>
                   <p className="text-[11px] font-normal text-zinc-500 leading-snug">
                     {tx.timestamp}

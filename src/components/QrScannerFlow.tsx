@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Camera, Check, Loader2, QrCode, ScanLine, X, AlertCircle } from 'lucide-react';
 import { Translations } from '../i18n/translations';
 import { NotificationToast, ToastData } from './NotificationToast';
-import { chain, assetBySymbol, type ParsedPaymentRequest, type ParsedTransferRequest } from '../adapters';
+import { chain, assetByMint, type ParsedPaymentRequest } from '../adapters';
+import { parseWebPaymentUrl } from '../services/webPaymentLink';
 
 interface QrScannerFlowProps {
   onClose: () => void;
@@ -95,6 +96,16 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
   const handleBarcodeDetected = useCallback((rawValue: string) => {
     stopBarcodeScanning();
     setDetectedValue(rawValue);
+
+    try {
+      const webUrl = new URL(rawValue);
+      if (webUrl.origin === window.location.origin && parseWebPaymentUrl(webUrl.href)) {
+        window.location.assign(webUrl.href);
+        return;
+      }
+    } catch {
+      // Continue by checking whether this is a Solana Pay URI.
+    }
     
     // Parse with Solana Pay adapter
     const parsed = chain.parsePaymentRequest(rawValue);
@@ -134,14 +145,16 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
   const handleConfirmScan = useCallback(() => {
     setToast({
       id: `toast-${Date.now()}`,
-      title: 'QR detectado',
-      message: detectedValue ?? 'Código QR leído correctamente',
+      title: 'Solicitud de pago leída',
+      message: 'Este escáner no envía fondos. Revisa y firma la solicitud desde una billetera Solana compatible.',
     });
     window.setTimeout(() => setToast(null), 3500);
-  }, [detectedValue]);
+  }, []);
 
   const handleRescan = useCallback(() => {
     setDetectedValue(null);
+    setParsedRequest(null);
+    setScanError(null);
     setState('idle');
   }, []);
 
@@ -245,7 +258,9 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
                 {parsedRequest.amount && (
                   <p className="text-xs font-mono text-[#26e5c8] break-all mb-1">
                     Amount: {parsedRequest.amountUi?.toFixed(2) || parsedRequest.amount}
-                    {parsedRequest.splToken ? ` ${assetBySymbol('USDC', 'devnet')?.symbol || 'USDC'}` : ' SOL'}
+                    {parsedRequest.splToken
+                      ? ` ${assetByMint(parsedRequest.splToken, chain.network().cluster)?.symbol ?? `Token ${parsedRequest.splToken.slice(0, 6)}…`}`
+                      : ' SOL'}
                   </p>
                 )}
                 {parsedRequest.message && (
@@ -287,7 +302,7 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
                 onClick={handleConfirmScan}
                 className="flex-1 h-11 px-5 rounded-xl bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold transition-colors cursor-pointer"
               >
-                Confirmar
+                Entendido
               </button>
             </div>
           </div>
