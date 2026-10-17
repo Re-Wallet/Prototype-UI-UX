@@ -14,6 +14,7 @@ import {
   Share2,
   Sparkles,
   AlertCircle,
+  X,
 } from 'lucide-react';
 import { Keypad } from './Keypad';
 import { CoinIcon } from './CoinIcon';
@@ -468,7 +469,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           actionLabel="Continuar a Detalles"
           showBalance={false}
           showPresets={false}
-          allowZero
+          actionDisabled={linkAmount <= 0}
           onAction={() => {
             setQrGenerated(false);
             setCopiedLink(false);
@@ -489,21 +490,42 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
       <div className="flex flex-col h-full text-white px-5 pt-3 pb-8 overflow-y-auto">
         <div className="flex-1">
           <div className="flex items-center justify-between min-h-[44px] mb-2">
-            <button
-              onClick={() => {
-                setQrGenerated(false);
-                setCopiedLink(false);
-                setPaymentRequest(null);
-                setQrError(null);
-                setSubflow('link_amount');
-              }}
-              className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
-            >
-              <ArrowLeft className="w-5 h-5" />
-              <span>Atras</span>
-            </button>
-            <h1 className="text-[17px] font-semibold text-white tracking-tight">Link de Pago</h1>
-            <div className="w-12" />
+            {qrGenerated && paymentRequest ? (
+              <>
+                <div className="w-12" />
+                <h1 className="text-[17px] font-semibold text-white tracking-tight">Link de Pago</h1>
+                <button
+                  onClick={() => {
+                    setQrGenerated(false);
+                    setCopiedLink(false);
+                    setPaymentRequest(null);
+                    setQrError(null);
+                  }}
+                  className="flex items-center justify-center w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                  aria-label="Cerrar link generado"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => {
+                    setQrGenerated(false);
+                    setCopiedLink(false);
+                    setPaymentRequest(null);
+                    setQrError(null);
+                    setSubflow('link_amount');
+                  }}
+                  className="flex items-center gap-1.5 text-[#26e5c8] hover:text-[#56f0d9] transition-colors text-sm font-semibold py-2 rounded-lg cursor-pointer"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                  <span>Atras</span>
+                </button>
+                <h1 className="text-[17px] font-semibold text-white tracking-tight">Link de Pago</h1>
+                <div className="w-12" />
+              </>
+            )}
           </div>
 
           <div className="p-4 rounded-2xl bg-[#1c1c1f] border border-white/5 mb-5 text-center">

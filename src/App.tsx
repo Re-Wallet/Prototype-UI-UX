@@ -354,8 +354,8 @@ function WalletApp() {
           <div className="relative flex-1 flex flex-col h-full overflow-hidden">
             {renderScreenContent()}
 
-            {/* Bottom Nav Bar (Home, Transfer, Settings) - Positioned strictly inside the phone container */}
-            {activeFlow === null && (!isInTransferSubflow || activeTab !== 'transfer') && (
+            {/* Bottom Nav Bar (Home, Transfer, Settings) - Hidden on /pay route */}
+            {activeFlow === null && (!isInTransferSubflow || activeTab !== 'transfer') && window.location.pathname !== '/pay' && (
               <BottomNav activeTab={activeTab} onTabChange={handleTabChange} t={t} />
             )}
 

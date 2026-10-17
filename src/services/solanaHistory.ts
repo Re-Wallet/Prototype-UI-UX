@@ -1,7 +1,8 @@
 import { assetBySymbol, chain, rpc, type Address } from '../adapters';
 import type { Transaction } from '../types/wallet';
 
-const SIGNATURE_PAGE_SIZE = 1_000;
+const SIGNATURE_PAGE_SIZE = 50;
+const SIGNATURE_PAGES = 2;
 const TRANSACTION_BATCH_SIZE = 8;
 const USDC_MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
 
@@ -51,7 +52,8 @@ function transactionTimestamp(blockTime: number | null): { date: Date; label: st
 function parseTokenDelta(
   meta: Record<string, unknown>,
   owner: string,
-  mint: string
+  mint: string,
+  ata?: string
 ): { delta: bigint; decimals: number } {
   const amounts = new Map<number, { pre: bigint; post: bigint; decimals: number }>();
 
@@ -59,7 +61,12 @@ function parseTokenDelta(
     for (const entry of asArray(meta[field])) {
       const record = asRecord(entry);
       const uiTokenAmount = asRecord(record?.uiTokenAmount);
-      if (record?.owner !== owner || record.mint !== mint) continue;
+      // Match by owner OR by ATA address — a payment to an existing ATA
+      // only lists the ATA in pre/postTokenBalances, not the owner wallet.
+      const matchesOwner = record?.owner === owner;
+      const matchesAta = ata && record?.owner === ata;
+      if (!matchesOwner && !matchesAta) continue;
+      if (record.mint !== mint) continue;
       if (!uiTokenAmount) continue;
       const tokenAmount = asBigInt(uiTokenAmount?.amount);
       if (typeof record.accountIndex !== 'number' || tokenAmount === null) continue;
@@ -112,7 +119,8 @@ function hasNativeSolTransfer(message: Record<string, unknown>, owner: string): 
 export function parseWalletTransaction(
   rawTransaction: unknown,
   owner: Address,
-  signatureInfo: SignatureInfo
+  signatureInfo: SignatureInfo,
+  ata?: Address
 ): Transaction[] {
   const transactionRecord = asRecord(rawTransaction);
   const meta = asRecord(transactionRecord?.meta);
@@ -122,15 +130,21 @@ export function parseWalletTransaction(
 
   const keys = asArray(message.accountKeys).map(accountKeyString);
   const ownerIndex = keys.indexOf(owner);
-  if (ownerIndex < 0) return [];
+  const ataIndex = ata ? keys.indexOf(ata) : -1;
+  // A payment to an existing ATA only includes the ATA in account keys, not
+  // the owner wallet. Accept the transaction when either is present.
+  if (ownerIndex < 0 && ataIndex < 0) return [];
+  // When owner is not in keys but ATA is (payment to existing ATA), use ATA as reference
+  const referenceIndex = ownerIndex >= 0 ? ownerIndex : ataIndex;
 
   const timestamp = transactionTimestamp(signatureInfo.blockTime);
   const signature = signatureInfo.signature;
   const movements: Transaction[] = [];
   const preBalances = asArray(meta.preBalances);
   const postBalances = asArray(meta.postBalances);
-  const preLamports = asBigInt(preBalances[ownerIndex]);
-  const postLamports = asBigInt(postBalances[ownerIndex]);
+  const balanceIndex = ownerIndex >= 0 ? ownerIndex : ataIndex;
+  const preLamports = asBigInt(preBalances[balanceIndex]);
+  const postLamports = asBigInt(postBalances[balanceIndex]);
   if (preLamports !== null && postLamports !== null) {
     const fee = keys[0] === owner ? asBigInt(meta.fee) ?? 0n : 0n;
     const delta = postLamports - preLamports + fee;
@@ -146,7 +160,7 @@ export function parseWalletTransaction(
         id: `${signature}-SOL`,
         title: `${incoming ? 'Ingreso' : 'Envío'} SOL`,
         type: incoming ? 'deposit' : 'withdrawal',
-        status: 'completed',
+        status: incoming ? 'completed' : 'in_progress',
         amount,
         assetSymbol: 'SOL',
         fiatAmount: null,
@@ -161,15 +175,17 @@ export function parseWalletTransaction(
     }
   }
 
-  const { delta, decimals } = parseTokenDelta(meta, owner, USDC_MINT);
+  const { delta, decimals } = parseTokenDelta(meta, owner, USDC_MINT, ata);
   if (delta !== 0n) {
     const amount = Math.abs(toUiAmount(delta, decimals));
     const incoming = delta > 0n;
+    // Withdrawals (sent) start as in_progress, deposits (received) as completed
+    const status = incoming ? 'completed' : 'in_progress';
     movements.push({
       id: `${signature}-USDC`,
       title: `${incoming ? 'Ingreso' : 'Envío'} USDC`,
       type: incoming ? 'received' : 'sent',
-      status: 'completed',
+      status,
       amount,
       assetSymbol: 'USDC',
       fiatAmount: amount,
@@ -190,7 +206,7 @@ async function getAddressSignatures(address: Address): Promise<SignatureInfo[]> 
   const signatures: SignatureInfo[] = [];
   let before: string | undefined;
 
-  while (true) {
+  for (let pageIndex = 0; pageIndex < SIGNATURE_PAGES; pageIndex++) {
     const page = await rpc().getSignaturesForAddress(address as never, {
       commitment: 'confirmed',
       limit: SIGNATURE_PAGE_SIZE,
@@ -238,7 +254,7 @@ export async function getWalletTransactions(owner: Address): Promise<Transaction
         encoding: 'jsonParsed',
         maxSupportedTransactionVersion: 0,
       }).send();
-      return parseWalletTransaction(response, owner, entry);
+      return parseWalletTransaction(response, owner, entry, associatedTokenAccount);
     }));
     history.push(...parsedTransactions.flat());
   }
