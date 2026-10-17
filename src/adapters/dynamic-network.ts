@@ -26,7 +26,7 @@ import {
 } from '@dynamic-labs-sdk/client';
 import type { SolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 
-import { dynamicClient } from '../dynamicClient';
+import { getDynamicClient } from '../dynamicClient';
 import { network } from './solana-client';
 import type { SupportedCluster } from '../contracts/tokens';
 
@@ -204,14 +204,14 @@ export async function inspectDynamicNetwork(
 
   let switchAvailable = false;
   try {
-    switchAvailable = isProgrammaticNetworkSwitchAvailable({ walletAccount }, dynamicClient);
+    switchAvailable = isProgrammaticNetworkSwitchAvailable({ walletAccount }, getDynamicClient());
   } catch {
     switchAvailable = false;
   }
 
   let active: { cluster?: string | null; genesisHash?: string | null; networkId?: string | null } | undefined;
   try {
-    const result = await getActiveNetworkData({ walletAccount }, dynamicClient);
+    const result = await getActiveNetworkData({ walletAccount }, getDynamicClient());
     active = result.networkData as typeof active;
   } catch (error) {
     return {
@@ -285,7 +285,7 @@ export async function ensureDynamicNetwork(
 
   let targetNetworkId: string | null = null;
   try {
-    const networks = getNetworksData(dynamicClient);
+    const networks = getNetworksData(getDynamicClient());
     // Genesis first, mirroring `compare`. Matching on the cluster label alone
     // could select a same-named network on a different chain.
     const byGenesis = networks.find(
@@ -309,7 +309,7 @@ export async function ensureDynamicNetwork(
   try {
     await switchActiveNetwork(
       { networkId: targetNetworkId, walletAccount },
-      dynamicClient
+      getDynamicClient()
     );
   } catch {
     return { ok: false, alignment: first };

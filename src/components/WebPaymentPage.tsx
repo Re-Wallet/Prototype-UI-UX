@@ -4,7 +4,7 @@ import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 import { useGetWalletAccounts } from '@dynamic-labs-sdk/react-hooks';
 import { ArrowLeft, CheckCircle2, Loader2, Wallet } from 'lucide-react';
 import { assetByMint, chain, type Address } from '../adapters';
-import { dynamicClient } from '../dynamicClient';
+import { getDynamicClient } from '../dynamicClient';
 import type { Transaction } from '../types/wallet';
 import { parseWebPaymentUrl, type WebPaymentIntent } from '../services/webPaymentLink';
 import { PhoneFrame } from './PhoneFrame';
@@ -109,7 +109,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
         amount: amount.toFixed(asset.decimals),
         recipient: intent.recipient,
         token: { address: asset.mint, decimals: asset.decimals },
-      }, dynamicClient);
+      }, getDynamicClient());
       setSignature(transactionHash);
       onPaymentSubmitted({
         id: transactionHash,

@@ -18,7 +18,7 @@ import {
 import { Keypad } from './Keypad';
 import { CoinIcon } from './CoinIcon';
 import { Transaction } from '../types/wallet';
-import { dynamicClient } from '../dynamicClient';
+import { getDynamicClient } from '../dynamicClient';
 import {
   assetBySymbol,
   chain,
@@ -177,7 +177,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           address: paymentAsset.mint,
           decimals: paymentAsset.decimals,
         },
-      }, dynamicClient);
+      }, getDynamicClient());
       setSubmittedSignature(transactionHash);
       onTransferComplete({
         id: `tx-${Date.now()}`,

@@ -4,7 +4,7 @@ import { transferAmount } from '@dynamic-labs-sdk/client';
 import type { SolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 import { Keypad } from './Keypad';
 import { CoinIcon } from './CoinIcon';
-import { dynamicClient } from '../dynamicClient';
+import { getDynamicClient } from '../dynamicClient';
 import { assetBySymbol, chain, type Address } from '../adapters';
 import type { Transaction } from '../types/wallet';
 
@@ -83,7 +83,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
         amount: amount.toFixed(asset.decimals),
         recipient: recipientAddress,
         token: { address: asset.mint, decimals: asset.decimals },
-      }, dynamicClient);
+      }, getDynamicClient());
 
       setSignature(transactionHash);
       onWithdrawComplete({
