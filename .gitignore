@@ -17,4 +17,9 @@ data/
 src/db/migrations/meta/_journal.json.bak
 # Local Pi runtime state
 .atl/
+
+# npm is the only supported package manager; block stray Bun/Pnpm/Yarn locks
 bun.lock
+bun.lockb
+pnpm-lock.yaml
+yarn.lock
