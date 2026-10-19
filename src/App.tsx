@@ -6,6 +6,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useGetWalletAccounts, useLogout, useUser } from '@dynamic-labs-sdk/react-hooks';
 import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
+import { X } from 'lucide-react';
 import { Header } from './components/Header';
 import { BalanceCard } from './components/BalanceCard';
 import { RecentTransactions } from './components/RecentTransactions';
@@ -17,13 +18,22 @@ import { SettingsView } from './components/SettingsView';
 import { AllTransactionsModal } from './components/AllTransactionsModal';
 import { TransactionReceiptModal } from './components/TransactionReceiptModal';
 import { NotificationToast, ToastData } from './components/NotificationToast';
+import { NotificationsView } from './components/NotificationsView';
 import { QrScannerFlow } from './components/QrScannerFlow';
 import { PhoneFrame } from './components/PhoneFrame';
 import { Transaction } from './types/wallet';
 import { Language, translations } from './i18n/translations';
+import { getStoredLanguage, storeLanguage, subscribeLanguage } from './i18n/language';
 import { DynamicAccountGate } from './components/DynamicAccountGate';
 import { assetBySymbol, chain, type Address } from './adapters';
 import { getWalletTransactions } from './services/solanaHistory';
+import { fetchWalletTransactions } from './services/walletApi';
+import {
+  fetchNotifications,
+  fetchWalletBalances,
+  markNotificationsRead,
+  type WalletNotification,
+} from './services/walletApi';
 import { WebPaymentPage } from './components/WebPaymentPage';
 
 export default function App() {
@@ -35,9 +45,17 @@ export default function App() {
 }
 
 function WalletApp() {
-  // English is the product default; Spanish remains available from settings.
-  const [language, setLanguage] = useState<Language>('en');
+  // English is the product default; the sign-in gate persists the user's
+  // choice (see src/i18n/language.ts) and the profile can change it later.
+  const [language, setLanguageState] = useState<Language>(getStoredLanguage);
   const t = translations[language];
+
+  useEffect(() => subscribeLanguage(setLanguageState), []);
+
+  const setLanguage = (next: Language) => {
+    setLanguageState(next);
+    storeLanguage(next);
+  };
   const { data: dynamicUser } = useUser();
   const { data: walletAccounts = [] } = useGetWalletAccounts();
   const { mutateAsync: logout } = useLogout();
@@ -52,8 +70,11 @@ function WalletApp() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isTransactionsLoading, setIsTransactionsLoading] = useState(true);
   const [transactionsError, setTransactionsError] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<WalletNotification[]>([]);
+  const [unreadNotifications, setUnreadNotifications] = useState<number>(0);
+  const [isNotificationsLoading, setIsNotificationsLoading] = useState(true);
 
-  const refreshBalance = useCallback(async () => {
+  const refreshBalance = useCallback(async (options?: { fresh?: boolean }) => {
     if (!solanaWallet) {
       setBalance(0);
       setSolBalance(0);
@@ -64,6 +85,25 @@ function WalletApp() {
     }
 
     setIsBalanceLoading(true);
+
+    // Server first: the local API reads the chain through one paced, cached
+    // budget shared by every wallet (see src/services/balanceCache.ts). The
+    // public devnet RPC hard-limits by IP, so letting each client poke it per
+    // load is what produced the 429s. Direct RPC stays as a fail-soft
+    // fallback for when the local API is offline.
+    const remote = await fetchWalletBalances(
+      solanaWallet.address as string,
+      options?.fresh === true
+    );
+    if (remote) {
+      setBalance(remote.usdc);
+      setSolBalance(remote.sol);
+      setBalanceError(null);
+      setSolBalanceError(null);
+      setIsBalanceLoading(false);
+      return;
+    }
+
     const usdc = assetBySymbol('USDC', chain.network().cluster);
     if (!usdc) {
       setBalanceError(`USDC no está configurado para ${chain.network().cluster}.`);
@@ -99,13 +139,21 @@ function WalletApp() {
 
     setIsTransactionsLoading(true);
     try {
-      const onChainTransactions = await getWalletTransactions(solanaWallet.address as Address);
+      // Primary source: the local DB (webhook + sweeper projections). The
+      // direct RPC path is rate-limited by the RPC provider (429s), so it is
+      // only a fallback when the API is offline or returns nothing useful.
+      const dbTransactions = await fetchWalletTransactions(
+        solanaWallet.address as string
+      );
+      const sourceTransactions =
+        dbTransactions ?? (await getWalletTransactions(solanaWallet.address as Address));
+
       setTransactions((current) => {
         const merged = new Map<string, Transaction>();
         for (const tx of current) {
           merged.set(`${tx.txHash ?? tx.id}:${tx.assetSymbol ?? 'USDC'}`, tx);
         }
-        for (const tx of onChainTransactions) {
+        for (const tx of sourceTransactions) {
           merged.set(`${tx.txHash ?? tx.id}:${tx.assetSymbol ?? 'USDC'}`, tx);
         }
         return [...merged.values()].sort((a, b) => b.date.getTime() - a.date.getTime());
@@ -118,18 +166,43 @@ function WalletApp() {
     }
   }, [solanaWallet?.address]);
 
+  const refreshNotifications = useCallback(async () => {
+    if (!solanaWallet) {
+      setNotifications([]);
+      setUnreadNotifications(0);
+      setIsNotificationsLoading(false);
+      return;
+    }
+
+    const feed = await fetchNotifications(solanaWallet.address as string);
+    // Fail-soft: when the local API is down, keep the last known feed rather
+    // than blanking the bell.
+    if (!feed) {
+      setIsNotificationsLoading(false);
+      return;
+    }
+    setNotifications(feed.items);
+    setUnreadNotifications(feed.unread);
+    setIsNotificationsLoading(false);
+  }, [solanaWallet?.address]);
+
   useEffect(() => {
     void refreshBalance();
     void refreshTransactions();
-  }, [refreshBalance, refreshTransactions]);
+    void refreshNotifications();
+  }, [refreshBalance, refreshTransactions, refreshNotifications]);
 
-  // Navigation and active flows (Navbar has only: home, transfer, settings)
+  // The webhook lands seconds after the send, so poll the local feed while the
+  // app is open: the bell badge then appears without a manual reload.
+  useEffect(() => {
+    const interval = setInterval(() => void refreshNotifications(), 20_000);
+    return () => clearInterval(interval);
+  }, [refreshNotifications]);
+  // Navigation and active flows (Navbar has only: home, transfer, activity)
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [activeFlow, setActiveFlow] = useState<
-    'deposit' | 'withdraw' | 'transfer' | 'all_transactions' | 'qr_scanner' | null
+    'deposit' | 'withdraw' | 'transfer' | 'qr_scanner' | 'profile' | 'notifications' | null
   >(null);
-  const [transferInitialMode, setTransferInitialMode] = useState<'send' | 'payment_link'>('send');
-  const [transferInitialRecipient, setTransferInitialRecipient] = useState<string | undefined>(undefined);
   const [isInTransferSubflow, setIsInTransferSubflow] = useState<boolean>(false);
 
   // Modals & Sheets
@@ -151,22 +224,39 @@ function WalletApp() {
 
   const handleTabChange = (tab: NavTab) => {
     setActiveTab(tab);
+    setActiveFlow(null);
     setIsInTransferSubflow(false);
   };
 
+  /** Clear the badge locally, then let the API confirm the unread count. */
+  const markAllNotificationsRead = async () => {
+    setUnreadNotifications(0);
+    setNotifications((current) => current.map((item) => ({ ...item, isRead: true })));
+    if (!solanaWallet) return;
+    const remaining = await markNotificationsRead(solanaWallet.address as string);
+    if (remaining !== null) setUnreadNotifications(remaining);
+  };
+
+  const handleOpenNotifications = () => {
+    setActiveFlow('notifications');
+    if (unreadNotifications > 0) void markAllNotificationsRead();
+  };
+
   // Transaction Event Handlers
+  // No success toast here on purpose: the notification feed (fed by the
+  // webhook) and the receipt modal already report a confirmed transfer.
   const handleWithdrawComplete = (newTx: Transaction) => {
     setTransactions((prev) => [newTx, ...prev]);
-    void refreshBalance();
+    // `fresh` bypasses the balance cache: the follow-up read must not be
+    // served pre-transfer values.
+    void refreshBalance({ fresh: true });
     void refreshTransactions();
-    showToast('Envío enviado a Solana', 'La transacción fue firmada por tu wallet Solana.');
   };
 
   const handleTransferComplete = (newTx: Transaction) => {
     setTransactions((prev) => [newTx, ...prev]);
-    void refreshBalance();
+    void refreshBalance({ fresh: true });
     void refreshTransactions();
-    showToast('Envío enviado a Solana', 'La transacción fue firmada por tu wallet Solana.');
   };
 
   const accountLabel = dynamicUser?.email
@@ -183,14 +273,6 @@ function WalletApp() {
     }
   };
 
-  const handleRepeatTransaction = (tx: Transaction) => {
-    if (tx.counterparty) {
-      setTransferInitialRecipient(tx.counterparty);
-      setTransferInitialMode('send');
-      setActiveFlow('transfer');
-    }
-  };
-
   // Content renderer inside the phone screen
   const renderScreenContent = () => {
     if (window.location.pathname === '/pay') {
@@ -203,7 +285,6 @@ function WalletApp() {
         <DepositFlow
           solanaAddress={solanaWallet?.address}
           balanceError={balanceError}
-          onRefreshBalance={refreshBalance}
           onClose={() => setActiveFlow(null)}
         />
       );
@@ -218,6 +299,7 @@ function WalletApp() {
           solanaWallet={solanaWallet}
           onClose={() => setActiveFlow(null)}
           onWithdrawComplete={handleWithdrawComplete}
+          t={t}
         />
       );
     }
@@ -231,12 +313,9 @@ function WalletApp() {
           solanaWallet={solanaWallet}
           onClose={() => {
             setActiveFlow(null);
-            setTransferInitialRecipient(undefined);
             setIsInTransferSubflow(false);
           }}
           onTransferComplete={handleTransferComplete}
-          initialMode={transferInitialMode}
-          initialRecipient={transferInitialRecipient}
           onSubflowChange={setIsInTransferSubflow}
         />
       );
@@ -246,17 +325,55 @@ function WalletApp() {
       return <QrScannerFlow onClose={() => setActiveFlow(null)} t={t} />;
     }
 
-    if (activeFlow === 'all_transactions') {
+    // Notifications feed (bell in the Header)
+    if (activeFlow === 'notifications') {
       return (
-        <AllTransactionsModal
-          transactions={transactions}
-          onSelectTransaction={(tx) => setSelectedTransaction(tx)}
+        <NotificationsView
+          items={notifications}
+          unread={unreadNotifications}
+          loading={isNotificationsLoading}
           onClose={() => setActiveFlow(null)}
+          onMarkAllRead={() => void markAllNotificationsRead()}
+          onOpenTransaction={(signature) => {
+            const tx = transactions.find((item) => item.txHash === signature);
+            if (tx) setSelectedTransaction(tx);
+          }}
+          t={t}
         />
       );
     }
 
-    // 2. Tab Navigation Screens (Only Home, Transfer, Settings inside phone)
+    // Profile (opened from the email/handle in the Header). A cross closes it
+    // straight back to home — no bell here, notifications live on the home header.
+    if (activeFlow === 'profile') {
+      return (
+        <div className="h-full flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between px-5 pt-3 pb-1 shrink-0">
+            <button
+              onClick={() => setActiveFlow(null)}
+              className="flex items-center justify-center w-8 h-8 rounded-full bg-[#1e1e22] border border-white/10 hover:border-white/25 hover:text-white text-zinc-300 active:scale-[0.95] transition-all cursor-pointer"
+              aria-label="Cerrar perfil"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <h1 className="text-[17px] font-semibold text-white tracking-tight">Perfil</h1>
+            <div className="w-8" />
+          </div>
+          <div className="flex-1 min-h-0">
+            <SettingsView
+              onLogout={handleLogout}
+              language={language}
+              onLanguageChange={setLanguage}
+              t={t}
+              dynamicEmail={dynamicUser?.email ?? undefined}
+              solanaAddress={solanaWallet?.address}
+            />
+          </div>
+        </div>
+      );
+    }
+
+    // 2. Tab Navigation Screens (Home, Transfer, Activity inside phone)
     if (activeTab === 'transfer') {
       return (
         <TransferFlow
@@ -269,29 +386,19 @@ function WalletApp() {
             setIsInTransferSubflow(false);
           }}
           onTransferComplete={handleTransferComplete}
-          initialMode="send"
           onSubflowChange={setIsInTransferSubflow}
         />
       );
     }
 
-    if (activeTab === 'settings') {
+    // Activity tab: full transaction history (also reached from "See All")
+    if (activeTab === 'activity') {
       return (
-        <div className="h-full overflow-y-auto">
-          <Header
-            handle={accountLabel}
-            onOpenProfile={() => setActiveTab('home')}
-            onOpenQrScanner={() => setActiveFlow('qr_scanner')}
-          />
-          <SettingsView
-            onLogout={handleLogout}
-            language={language}
-            onLanguageChange={setLanguage}
-            t={t}
-            dynamicEmail={dynamicUser?.email ?? undefined}
-            solanaAddress={solanaWallet?.address}
-          />
-        </div>
+        <AllTransactionsModal
+          transactions={transactions}
+          onSelectTransaction={(tx) => setSelectedTransaction(tx)}
+          onClose={() => setActiveTab('home')}
+        />
       );
     }
 
@@ -300,8 +407,9 @@ function WalletApp() {
       <div className="h-full overflow-y-auto select-none">
         <Header
           handle={accountLabel}
-          onOpenProfile={() => setActiveTab('settings')}
-          onOpenQrScanner={() => setActiveFlow('qr_scanner')}
+          onOpenProfile={() => setActiveFlow('profile')}
+          onOpenNotifications={handleOpenNotifications}
+          unreadCount={unreadNotifications}
         />
 
         <BalanceCard
@@ -332,7 +440,7 @@ function WalletApp() {
         <RecentTransactions
           transactions={transactions}
           onSelectTransaction={(tx) => setSelectedTransaction(tx)}
-          onSeeAll={() => setActiveFlow('all_transactions')}
+          onSeeAll={() => setActiveTab('activity')}
           onRefresh={() => void refreshTransactions()}
           t={t}
           loading={isTransactionsLoading}
@@ -354,9 +462,14 @@ function WalletApp() {
           <div className="relative flex-1 flex flex-col h-full overflow-hidden">
             {renderScreenContent()}
 
-            {/* Bottom Nav Bar (Home, Transfer, Settings) - Hidden on /pay route */}
+            {/* Bottom Nav Bar (Home, Transfer, Activity) - Hidden on /pay route */}
             {activeFlow === null && (!isInTransferSubflow || activeTab !== 'transfer') && window.location.pathname !== '/pay' && (
-              <BottomNav activeTab={activeTab} onTabChange={handleTabChange} t={t} />
+              <BottomNav
+                activeTab={activeTab}
+                onTabChange={handleTabChange}
+                onOpenQrScanner={() => setActiveFlow('qr_scanner')}
+                t={t}
+              />
             )}
 
             {/* Transaction Receipt Modal - Rendered strictly inside phone interface */}
@@ -364,7 +477,7 @@ function WalletApp() {
               <TransactionReceiptModal
                 transaction={selectedTransaction}
                 onClose={() => setSelectedTransaction(null)}
-                onRepeatTransaction={handleRepeatTransaction}
+                userEmail={dynamicUser?.email ?? null}
               />
             )}
           </div>

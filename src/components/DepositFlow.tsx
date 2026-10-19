@@ -1,22 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Check, Copy, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Check, Copy, Loader2 } from 'lucide-react';
 import { chain } from '../adapters';
 
 interface DepositFlowProps {
   solanaAddress?: string;
   balanceError?: string | null;
-  onRefreshBalance: () => Promise<void>;
   onClose: () => void;
 }
 
 export const DepositFlow: React.FC<DepositFlowProps> = ({
   solanaAddress,
   balanceError,
-  onRefreshBalance,
   onClose,
 }) => {
   const [copied, setCopied] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrError, setQrError] = useState<string | null>(null);
 
@@ -59,32 +56,25 @@ export const DepositFlow: React.FC<DepositFlowProps> = ({
     }
   };
 
-  const handleRefreshBalance = async () => {
-    setRefreshing(true);
-    try {
-      await onRefreshBalance();
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
   return (
-    <div className="flex flex-col h-full justify-between text-white px-5 pt-3 pb-8 overflow-y-auto">
-      <div>
-        <div className="flex items-center justify-between min-h-[44px] mb-3">
-          <button
-            onClick={onClose}
-            className="flex items-center gap-1.5 text-zinc-400 hover:text-white transition-colors text-sm font-medium py-2 rounded-lg cursor-pointer"
-          >
-            <ArrowLeft className="w-5 h-5" />
-            <span>Volver</span>
-          </button>
-          <h1 className="text-[17px] font-semibold text-white tracking-tight">Depósito USDC</h1>
-          <div className="w-12" />
-        </div>
+    <div className="flex flex-col h-full text-white px-5 pt-3 pb-8 overflow-y-auto">
+      {/* Header pinned to the top */}
+      <div className="flex items-center justify-between min-h-[44px] mb-3 shrink-0">
+        <button
+          onClick={onClose}
+          className="flex items-center gap-1.5 text-zinc-400 hover:text-white transition-colors text-sm font-medium py-2 rounded-lg cursor-pointer"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          <span>Volver</span>
+        </button>
+        <h1 className="text-[17px] font-semibold text-white tracking-tight">Depósito USDC</h1>
+        <div className="w-12" />
+      </div>
 
+      {/* Centered block: the QR card is the optical middle of the screen */}
+      <div className="flex-1 flex flex-col justify-center">
         <p className="text-xs text-zinc-400 text-center mb-3">
-          Envía USDC en {chain.describeNetwork()} a esta dirección y consulta el saldo en la red después de la confirmación.
+          Envía USDC en {chain.describeNetwork()} a esta dirección. El saldo se actualiza solo cuando la red confirma el depósito.
         </p>
 
         <div className="p-5 rounded-2xl bg-white flex flex-col items-center justify-center my-2 max-w-[240px] mx-auto shadow-xl">
@@ -124,14 +114,6 @@ export const DepositFlow: React.FC<DepositFlowProps> = ({
           </button>
         </div>
         {balanceError && <p role="alert" className="mt-2 text-xs text-red-400">{balanceError}</p>}
-        <button
-          onClick={handleRefreshBalance}
-          disabled={refreshing || !solanaAddress}
-          className="mt-3 w-full h-11 rounded-xl bg-[#26e5c8]/10 hover:bg-[#26e5c8]/20 disabled:opacity-50 border border-[#26e5c8]/30 text-[#26e5c8] text-sm font-semibold flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed"
-        >
-          {refreshing ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-          <span>Actualizar saldo desde Solana</span>
-        </button>
       </div>
 
       <div className="pt-4 pb-2">

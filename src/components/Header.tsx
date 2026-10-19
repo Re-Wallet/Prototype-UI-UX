@@ -1,20 +1,23 @@
 import React from 'react';
-import { QrCode } from 'lucide-react';
+import { Bell } from 'lucide-react';
 
 interface HeaderProps {
   handle: string;
   onOpenProfile: () => void;
-  onOpenQrScanner: () => void;
+  onOpenNotifications: () => void;
+  /** Unread notification count; shows a badge on the bell when > 0. */
+  unreadCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   handle,
   onOpenProfile,
-  onOpenQrScanner,
+  onOpenNotifications,
+  unreadCount = 0,
 }) => {
   return (
     <header className="flex items-center justify-between px-5 pt-3 pb-2 text-white">
-      {/* Left: User Avatar & Handle */}
+      {/* Left: User Avatar & Handle → opens the profile screen */}
       <button
         onClick={onOpenProfile}
         className="flex items-center gap-2.5 min-h-[44px] group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ff5a1f] rounded-full pr-2 cursor-pointer"
@@ -29,14 +32,23 @@ export const Header: React.FC<HeaderProps> = ({
         </span>
       </button>
 
-      {/* Right: QR Code Scanner - Orange QR icon */}
+      {/* Right: Notifications — opens the Activity section */}
       <button
-        onClick={onOpenQrScanner}
-        className="w-8 h-8 rounded-full bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.95] flex items-center justify-center text-white shadow-lg shadow-[#ff5a1f]/30 transition-all cursor-pointer"
-        title="Escanear código QR"
-        aria-label="Escanear código QR"
+        onClick={onOpenNotifications}
+        className="relative w-8 h-8 rounded-full bg-[#1e1e22] border border-white/10 hover:border-white/25 hover:text-white active:scale-[0.95] flex items-center justify-center text-zinc-300 transition-all cursor-pointer"
+        title="Notificaciones"
+        aria-label={
+          unreadCount > 0
+            ? `Notificaciones, ${unreadCount} sin leer`
+            : 'Notificaciones'
+        }
       >
-        <QrCode className="w-4.5 h-4.5" />
+        <Bell className="w-4 h-4" />
+        {unreadCount > 0 && (
+          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[#ff5a1f] text-white text-[10px] font-bold leading-4 text-center tabular-nums shadow-md shadow-black/40">
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </span>
+        )}
       </button>
     </header>
   );

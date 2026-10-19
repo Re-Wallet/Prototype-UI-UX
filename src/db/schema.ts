@@ -215,7 +215,10 @@ export const transactions = sqliteTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex('uk_tx_reference').on(table.referenceId),
+    // Idempotency is scoped per user. A single Solana transaction produces one
+    // movement for each wallet involved (sender and receiver share the
+    // signature), so `reference_id` alone is not unique across the table.
+    uniqueIndex('uk_tx_user_reference').on(table.userId, table.referenceId),
     index('idx_tx_user_status').on(table.userId, table.status),
     index('idx_tx_user_type').on(table.userId, table.type),
     index('idx_tx_user_created').on(table.userId, table.createdAt),
@@ -347,6 +350,52 @@ export const notifications = sqliteTable(
 );
 
 // ============================================================================
+// WEBHOOK EVENTS (delivery log / dedupe)
+// ============================================================================
+
+/**
+ * Raw log of every webhook delivery accepted from Dynamic.
+ *
+ * This table dedupes *deliveries*, which is a different concern from the
+ * idempotency of the `transactions` projection: a redelivery must not create a
+ * second movement, and one transaction legitimately yields several deliveries
+ * (one per involved wallet). `message_id` is the key Dynamic documents for
+ * redelivery handling — `event_id` is shared by every message of one event, so
+ * it cannot be used as the dedupe key.
+ */
+export const webhookEvents = sqliteTable(
+  'webhook_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+
+    messageId: text('message_id').notNull(),
+    eventId: text('event_id'),
+    webhookId: text('webhook_id'),
+    eventName: text('event_name').notNull(),
+    environmentId: text('environment_id'),
+
+    dynamicUserId: text('dynamic_user_id'),
+    transactionHash: text('transaction_hash'),
+
+    isRedelivery: integer('is_redelivery', { mode: 'boolean' }).default(false).notNull(),
+    /** Exact bytes of the request body, kept for signature verification and audit. */
+    rawJson: text('raw_json'),
+
+    receivedAt: integer('received_at', { mode: 'timestamp' })
+      .default(sql`(unixepoch())`)
+      .notNull(),
+    processedAt: integer('processed_at', { mode: 'timestamp' }),
+    processError: text('process_error'),
+  },
+  (table) => [
+    uniqueIndex('uk_webhook_message').on(table.messageId),
+    index('idx_webhook_event_name').on(table.eventName),
+    index('idx_webhook_tx').on(table.transactionHash),
+    index('idx_webhook_processed').on(table.processedAt),
+  ]
+);
+
+// ============================================================================
 // AUDIT LOG
 // ============================================================================
 
@@ -472,6 +521,9 @@ export type NewFiatRate = typeof fiatRates.$inferInsert;
 
 export type Notification = typeof notifications.$inferSelect;
 export type NewNotification = typeof notifications.$inferInsert;
+
+export type WebhookEvent = typeof webhookEvents.$inferSelect;
+export type NewWebhookEvent = typeof webhookEvents.$inferInsert;
 
 export type AuditLogEntry = typeof auditLog.$inferSelect;
 export type NewAuditLogEntry = typeof auditLog.$inferInsert;

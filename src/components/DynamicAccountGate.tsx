@@ -3,6 +3,44 @@ import { useCreateWaasWalletAccounts, useGetWalletAccounts, useInitStatus, useLo
 import { getChainsMissingWaasWalletAccounts } from '@dynamic-labs-sdk/client/waas';
 import { ArrowLeft, LoaderCircle, Mail, Wallet } from 'lucide-react';
 import { PhoneFrame } from './PhoneFrame';
+import type { Language } from '../i18n/translations';
+import { getStoredLanguage, storeLanguage, subscribeLanguage } from '../i18n/language';
+
+/** Sign-in copy: the gate mounts outside <WalletApp>, so it keeps its own map. */
+const signInCopy: Record<Language, {
+  title: string;
+  subtitle: string;
+  emailLabel: string;
+  emailPlaceholder: string;
+  sendCode: string;
+  verify: string;
+  changeEmail: string;
+  codeSentTo: string;
+  language: string;
+}> = {
+  en: {
+    title: 'Your wallet starts here',
+    subtitle: 'Sign in with your email. Dynamic will securely create your embedded Solana wallet.',
+    emailLabel: 'Email address',
+    emailPlaceholder: 'you@example.com',
+    sendCode: 'Send verification code',
+    verify: 'Verify and continue',
+    changeEmail: 'Change email',
+    codeSentTo: 'Verification code sent to',
+    language: 'Language',
+  },
+  es: {
+    title: 'Tu billetera empieza acá',
+    subtitle: 'Ingresá con tu email. Dynamic va a crear tu wallet Solana embebida de forma segura.',
+    emailLabel: 'Correo electrónico',
+    emailPlaceholder: 'tu@ejemplo.com',
+    sendCode: 'Enviar código de verificación',
+    verify: 'Verificar y continuar',
+    changeEmail: 'Cambiar correo',
+    codeSentTo: 'Código de verificación enviado a',
+    language: 'Idioma',
+  },
+};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Something went wrong. Please try again.';
@@ -26,6 +64,9 @@ function SignInScreen() {
   const [email, setEmail] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // Chosen at sign-in and persisted, so the wallet app boots in that language.
+  const [language, setLanguageState] = useState<Language>(getStoredLanguage);
+  const copy = signInCopy[language];
   const {
     mutateAsync: sendEmailOTP,
     data: otpVerification,
@@ -37,6 +78,13 @@ function SignInScreen() {
     isPending: isVerifying,
     reset: resetVerifyOTP,
   } = useVerifyOTP();
+
+  useEffect(() => subscribeLanguage(setLanguageState), []);
+
+  const handleLanguageChange = (next: Language) => {
+    setLanguageState(next);
+    storeLanguage(next);
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -75,23 +123,23 @@ function SignInScreen() {
         src="/rewallet-lockup.png"
       />
       <h1 className="mb-3 text-3xl font-bold tracking-tight text-white">
-        Your wallet starts here
+        {copy.title}
       </h1>
       <p className="mb-8 text-sm leading-6 text-zinc-400">
-        Sign in with your email. Dynamic will securely create your embedded Solana wallet.
+        {copy.subtitle}
       </p>
 
       <form className="space-y-4" onSubmit={handleSubmit}>
         {!otpVerification ? (
           <label className="block">
-            <span className="mb-2 block text-xs font-semibold text-zinc-300">Email address</span>
+            <span className="mb-2 block text-xs font-semibold text-zinc-300">{copy.emailLabel}</span>
             <span className="flex h-12 items-center gap-3 rounded-xl border border-white/10 bg-[#18181b] px-4 focus-within:border-[#ff5a1f]/70">
               <Mail className="h-4 w-4 shrink-0 text-zinc-500" />
               <input
                 autoComplete="email"
                 className="w-full bg-transparent text-sm text-white outline-none placeholder:text-zinc-600"
                 onChange={(event) => setEmail(event.target.value)}
-                placeholder="you@example.com"
+                placeholder={copy.emailPlaceholder}
                 required
                 type="email"
                 value={email}
@@ -106,11 +154,11 @@ function SignInScreen() {
               type="button"
             >
               <ArrowLeft className="h-4 w-4" />
-              Change email
+              {copy.changeEmail}
             </button>
             <label className="block">
               <span className="mb-2 block text-xs font-semibold text-zinc-300">
-                Verification code sent to {email}
+                {copy.codeSentTo} {email}
               </span>
               <input
                 autoComplete="one-time-code"
@@ -126,6 +174,37 @@ function SignInScreen() {
           </>
         )}
 
+        {/* Language toggle: configure es/en before the first screen of the app. */}
+        {!otpVerification && (
+          <div className="flex items-center justify-center gap-2.5 pt-1">
+            <span className="text-xs font-semibold text-zinc-500">{copy.language}</span>
+            <div className="flex items-center gap-1 rounded-xl border border-white/10 bg-[#18181b] p-1">
+              <button
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer ${
+                  language === 'es'
+                    ? 'bg-[#ff5a1f] text-white shadow-sm'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+                onClick={() => handleLanguageChange('es')}
+                type="button"
+              >
+                Español
+              </button>
+              <button
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer ${
+                  language === 'en'
+                    ? 'bg-[#ff5a1f] text-white shadow-sm'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+                onClick={() => handleLanguageChange('en')}
+                type="button"
+              >
+                English
+              </button>
+            </div>
+          </div>
+        )}
+
         {error && (
           <p aria-live="polite" className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-300">
             {error}
@@ -138,7 +217,7 @@ function SignInScreen() {
           type="submit"
         >
           {(isSending || isVerifying) && <LoaderCircle className="h-4 w-4 animate-spin" />}
-          {otpVerification ? 'Verify and continue' : 'Send verification code'}
+          {otpVerification ? copy.verify : copy.sendCode}
         </button>
       </form>
     </div>

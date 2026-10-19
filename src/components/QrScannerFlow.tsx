@@ -8,11 +8,24 @@ import { parseWebPaymentUrl } from '../services/webPaymentLink';
 interface QrScannerFlowProps {
   onClose: () => void;
   t: Translations;
+  /**
+   * `payment` (default) inspects Solana Pay requests / ReWallet links.
+   * `address` extracts a destination address only — used by the withdraw form,
+   * where the QR just fills the recipient field instead of being reviewed.
+   */
+  mode?: 'payment' | 'address';
+  /** Address mode only: invoked with the scanned base58 address. */
+  onAddressDetected?: (address: string) => void;
 }
 
 type ScanState = 'idle' | 'requesting' | 'scanning' | 'detected' | 'denied' | 'unsupported';
 
-export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
+export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({
+  onClose,
+  t,
+  mode = 'payment',
+  onAddressDetected,
+}) => {
   const [state, setState] = useState<ScanState>('idle');
   const [detectedValue, setDetectedValue] = useState<string | null>(null);
   const [parsedRequest, setParsedRequest] = useState<ParsedPaymentRequest | null>(null);
@@ -96,19 +109,47 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
   const handleBarcodeDetected = useCallback((rawValue: string) => {
     stopBarcodeScanning();
     setDetectedValue(rawValue);
+    const trimmed = rawValue.trim();
 
     try {
-      const webUrl = new URL(rawValue);
-      if (webUrl.origin === window.location.origin && parseWebPaymentUrl(webUrl.href)) {
+      const webUrl = new URL(trimmed);
+      // Navigating to a payment link only makes sense while reviewing a
+      // payment request; address mode must never hijack the withdraw form.
+      if (
+        mode === 'payment' &&
+        webUrl.origin === window.location.origin &&
+        parseWebPaymentUrl(webUrl.href)
+      ) {
         window.location.assign(webUrl.href);
         return;
       }
     } catch {
       // Continue by checking whether this is a Solana Pay URI.
     }
-    
+
     // Parse with Solana Pay adapter
-    const parsed = chain.parsePaymentRequest(rawValue);
+    const parsed = chain.parsePaymentRequest(trimmed);
+
+    if (mode === 'address') {
+      // A payment QR still carries a usable destination in its path; a plain
+      // base58 QR is the other accepted shape.
+      const address =
+        parsed && parsed.kind === 'transfer'
+          ? parsed.recipient
+          : chain.isBase58(trimmed)
+            ? trimmed
+            : null;
+      stopCamera();
+      if (address && onAddressDetected) {
+        onAddressDetected(address);
+        onClose();
+        return;
+      }
+      setScanError('El QR no contiene una dirección Solana válida');
+      setState('detected');
+      return;
+    }
+
     if (parsed) {
       setParsedRequest(parsed);
       setState('detected');
@@ -118,7 +159,7 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
       setState('detected');
       stopCamera();
     }
-  }, [stopBarcodeScanning, stopCamera]);
+  }, [stopBarcodeScanning, stopCamera, mode, onAddressDetected, onClose]);
 
   // Start/stop scanning when state changes
   useEffect(() => {
@@ -142,21 +183,27 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
 
 
 
-  const handleConfirmScan = useCallback(() => {
-    setToast({
-      id: `toast-${Date.now()}`,
-      title: 'Solicitud de pago leída',
-      message: 'Este escáner no envía fondos. Revisa y firma la solicitud desde una billetera Solana compatible.',
-    });
-    window.setTimeout(() => setToast(null), 3500);
-  }, []);
-
   const handleRescan = useCallback(() => {
     setDetectedValue(null);
     setParsedRequest(null);
     setScanError(null);
     setState('idle');
   }, []);
+
+  const handleConfirmScan = useCallback(() => {
+    // Address mode only ever uses the scan to fill a form: "Entendido" just
+    // returns to the viewfinder.
+    if (mode === 'address') {
+      handleRescan();
+      return;
+    }
+    setToast({
+      id: `toast-${Date.now()}`,
+      title: 'Solicitud de pago leída',
+      message: 'Este escáner no envía fondos. Revisa y firma la solicitud desde una billetera Solana compatible.',
+    });
+    window.setTimeout(() => setToast(null), 3500);
+  }, [mode, handleRescan]);
 
   return (
     <div className="flex flex-col h-full text-white px-5 pt-3 pb-8 overflow-y-auto">
@@ -209,9 +256,15 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
             <div className="w-16 h-16 rounded-full bg-[#ff5a1f]/15 border border-[#ff5a1f]/30 flex items-center justify-center mx-auto mb-4">
               <QrCode className="w-8 h-8 text-[#ff5a1f]" />
             </div>
-            <p className="text-sm text-zinc-300 mb-1">{t.qrScannerHint}</p>
+            <p className="text-sm text-zinc-300 mb-1">
+              {mode === 'address'
+                ? 'Escanea el QR con la dirección del receptor.'
+                : t.qrScannerHint}
+            </p>
             <p className="text-xs text-zinc-500 mb-5">
-              Compatible con códigos Solana Pay y links de cobro ReWallet.
+              {mode === 'address'
+                ? 'También funciona un QR de pago Solana Pay: se usa solo la dirección.'
+                : 'Compatible con códigos Solana Pay y links de cobro ReWallet.'}
             </p>
             <button
               onClick={startCamera}
@@ -244,10 +297,20 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({ onClose, t }) => {
         {/* Detected */}
         {state === 'detected' && (
           <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center text-center px-6">
-            <div className="w-14 h-14 rounded-full bg-[#10b981] text-black flex items-center justify-center mb-3">
-              <Check className="w-7 h-7 stroke-[3]" />
+            <div
+              className={`w-14 h-14 rounded-full flex items-center justify-center mb-3 ${
+                scanError ? 'bg-red-900/40 text-red-400' : 'bg-[#10b981] text-black'
+              }`}
+            >
+              {scanError ? (
+                <X className="w-7 h-7" />
+              ) : (
+                <Check className="w-7 h-7 stroke-[3]" />
+              )}
             </div>
-            <p className="text-sm font-semibold text-white mb-1">{t.qrScannerDetected}</p>
+            <p className="text-sm font-semibold text-white mb-1">
+              {scanError ? 'QR inválido' : t.qrScannerDetected}
+            </p>
             
             {parsedRequest && parsedRequest.kind === 'transfer' && (
               <div className="w-full max-w-[280px] mb-4 p-3 rounded-xl bg-white/5 border border-white/10 text-left">

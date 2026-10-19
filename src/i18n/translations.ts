@@ -4,7 +4,13 @@ export interface Translations {
   // Navigation
   navHome: string;
   navTransfer: string;
-  navSettings: string;
+  navActivity: string;
+
+  // Notifications
+  notificationsTitle: string;
+  noNotifications: string;
+  loadingNotifications: string;
+  markAllRead: string;
 
   // Header & Balance
   yourBalance: string;
@@ -117,7 +123,12 @@ export const translations: Record<Language, Translations> = {
   es: {
     navHome: 'Inicio',
     navTransfer: 'Transferir',
-    navSettings: 'Ajustes',
+    navActivity: 'Actividad',
+
+    notificationsTitle: 'Notificaciones',
+    noNotifications: 'No tienes notificaciones todavía',
+    loadingNotifications: 'Cargando notificaciones…',
+    markAllRead: 'Marcar leídas',
 
     yourBalance: 'Saldo actual',
     solanaAssets: 'Activos en Solana',
@@ -127,7 +138,7 @@ export const translations: Record<Language, Translations> = {
     showBalance: 'Mostrar saldo',
     deposit: 'Depósito',
     withdraw: 'Retiro',
-    qrChargeTooltip: 'Cobrar por QR / Payment Link',
+    qrChargeTooltip: 'Cobrar por QR',
 
     recents: 'Reciente',
     seeAll: 'Ver todo',
@@ -180,7 +191,7 @@ export const translations: Record<Language, Translations> = {
     searchByUsername: 'Search by username',
     choose: 'Elegir',
     or: 'También puedes',
-    generatePaymentLink: 'Generar link de pago',
+    generatePaymentLink: 'Cobrar por QR',
     amountToSend: 'Monto a Enviar',
     noteOptional: 'Nota o motivo (opcional)',
     notePlaceholder: 'Ej. Almuerzo, diseño, honorarios...',
@@ -189,13 +200,13 @@ export const translations: Record<Language, Translations> = {
     confirmAndSend: 'Confirmar y Enviar',
     transferSentTitle: '¡Transferencia Enviada!',
 
-    paymentLinkTitle: 'Payment Link',
+    paymentLinkTitle: 'Cobrar por QR',
     amountToCharge: 'Monto a Cobrar',
     conceptLabel: 'Concepto o descripción',
     conceptPlaceholder: 'Ej. Honorarios diseño, consultoría, cuota...',
     chargeHandle: 'Tu Handle de Cobro',
     chargeFee: 'Comisión de Cobro Re Wallet',
-    generateLinkAndQr: 'Generar Link & QR',
+    generateLinkAndQr: 'Generar QR',
     paymentReceivedTitle: '¡Cobro Recibido con Éxito!',
     shareableLink: 'Enlace de cobro para compartir',
     copyLink: 'Copiar Link',
@@ -220,7 +231,12 @@ export const translations: Record<Language, Translations> = {
   en: {
     navHome: 'Home',
     navTransfer: 'Transfer',
-    navSettings: 'Settings',
+    navActivity: 'Activity',
+
+    notificationsTitle: 'Notifications',
+    noNotifications: 'No notifications yet',
+    loadingNotifications: 'Loading notifications…',
+    markAllRead: 'Mark as read',
 
     yourBalance: 'Your Balance',
     solanaAssets: 'Assets on Solana',
@@ -230,7 +246,7 @@ export const translations: Record<Language, Translations> = {
     showBalance: 'Show balance',
     deposit: 'Deposit',
     withdraw: 'Withdraw',
-    qrChargeTooltip: 'Charge via QR / Payment Link',
+    qrChargeTooltip: 'Charge via QR',
 
     recents: 'Recents',
     seeAll: 'See All',
@@ -283,7 +299,7 @@ export const translations: Record<Language, Translations> = {
     searchByUsername: 'Search by username',
     choose: 'Select',
     or: 'Or',
-    generatePaymentLink: 'Generate a payment link',
+    generatePaymentLink: 'Get paid via QR',
     amountToSend: 'Amount to Send',
     noteOptional: 'Note or memo (optional)',
     notePlaceholder: 'E.g. Lunch, design project, fees...',
@@ -292,13 +308,13 @@ export const translations: Record<Language, Translations> = {
     confirmAndSend: 'Confirm & Send',
     transferSentTitle: 'Transfer Sent!',
 
-    paymentLinkTitle: 'Payment Link',
+    paymentLinkTitle: 'QR charge',
     amountToCharge: 'Amount to Charge',
     conceptLabel: 'Concept or description',
     conceptPlaceholder: 'E.g. UX design fee, consulting, split...',
     chargeHandle: 'Your Payment Handle',
     chargeFee: 'Re Wallet Collection Fee',
-    generateLinkAndQr: 'Generate Link & QR',
+    generateLinkAndQr: 'Generate QR',
     paymentReceivedTitle: 'Payment Received Successfully!',
     shareableLink: 'Shareable payment link',
     copyLink: 'Copy Link',

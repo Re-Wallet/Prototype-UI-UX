@@ -2,6 +2,21 @@ import React from 'react';
 import { ArrowDown, ArrowUp, Loader2 } from 'lucide-react';
 import { Translations } from '../i18n/translations';
 
+/**
+ * Display balances by TRUNCATING, never by rounding up.
+ *
+ * The network fee on Solana is 0.000005 SOL. A `toFixed(4)` that rounds up
+ * hides it and shows the user more than they own (9.999985 rendered as
+ * "10.0000" — a full SOL of phantom money). Truncation can only ever display
+ * less than the true balance, which is the safe direction for money.
+ */
+function truncate(value: number, decimals: number): string {
+  const factor = 10 ** decimals;
+  const [int, dec = ''] = (Math.floor(value * factor) / factor).toFixed(decimals).split('.');
+  const trimmed = dec.replace(/0+$/, '');
+  return trimmed ? `${int}.${trimmed}` : int;
+}
+
 interface BalanceCardProps {
   balance: number;
   solBalance: number;
@@ -21,7 +36,11 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
   onWithdraw,
   t,
 }) => {
-  const [integerPart, decimalPart] = balance.toFixed(2).split('.');
+  // The large display always shows two decimals, so it floors without
+  // trimming; the compact rows use `truncate` (floor + trim).
+  const [integerPart, decimalPart] = (Math.floor(balance * 100) / 100)
+    .toFixed(2)
+    .split('.');
 
   return (
     <div className="px-5 pt-3 pb-3">
@@ -61,13 +80,13 @@ export const BalanceCard: React.FC<BalanceCardProps> = ({
           <div>
             <p className="text-[11px] text-zinc-500">{t.solBalance}</p>
             <p className="mt-0.5 text-sm font-semibold tabular-nums text-white">
-              {isBalanceHidden ? '••••' : balanceLoading ? '…' : `${solBalance.toFixed(4)} SOL`}
+              {isBalanceHidden ? '••••' : balanceLoading ? '…' : `${truncate(solBalance, 6)} SOL`}
             </p>
           </div>
           <div>
             <p className="text-[11px] text-zinc-500">{t.usdcBalance}</p>
             <p className="mt-0.5 text-sm font-semibold tabular-nums text-white">
-              {isBalanceHidden ? '••••' : balanceLoading ? '…' : `${balance.toFixed(2)} USDC`}
+              {isBalanceHidden ? '••••' : balanceLoading ? '…' : `${truncate(balance, 2)} USDC`}
             </p>
           </div>
         </div>

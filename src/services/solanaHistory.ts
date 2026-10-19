@@ -3,8 +3,17 @@ import type { Transaction } from '../types/wallet';
 
 const SIGNATURE_PAGE_SIZE = 50;
 const SIGNATURE_PAGES = 2;
-const TRANSACTION_BATCH_SIZE = 8;
+// The public devnet endpoint answers ~10 heavy getTransaction calls per short
+// window, then 429s the caller (verified empirically). One call every ~400ms
+// stays under the limit; a full two-wallet backfill is ~15s, which is fine
+// for a background job.
+const TRANSACTION_BATCH_SIZE = 1;
+const RPC_PACE_MS = 400;
 const USDC_MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 interface SignatureInfo {
   signature: string;
@@ -233,13 +242,19 @@ export async function getWalletTransactions(owner: Address): Promise<Transaction
     chain.deriveAta(owner, usdc),
     chain.getTokenAccountAddresses(owner, usdc),
   ]);
-  const [walletSignatures, ...tokenSignaturePages] = await Promise.all([
-    getAddressSignatures(owner),
-    ...[...new Set([associatedTokenAccount, ...ownedTokenAccounts])]
-      .map((tokenAccount) => getAddressSignatures(tokenAccount)),
-  ]);
+  // Signature pages are fetched sequentially: the burst of parallel pages is
+  // what trips the shared endpoint's rate limit in the first place.
+  const signatureAddresses = [
+    owner,
+    ...new Set([associatedTokenAccount, ...ownedTokenAccounts]),
+  ];
+  const signatureSets: SignatureInfo[][] = [];
+  for (const [index, address] of signatureAddresses.entries()) {
+    if (index > 0) await sleep(RPC_PACE_MS);
+    signatureSets.push(await getAddressSignatures(address));
+  }
   const signatures = new Map<string, SignatureInfo>();
-  for (const entry of [...walletSignatures, ...tokenSignaturePages.flat()]) {
+  for (const entry of signatureSets.flat()) {
     signatures.set(entry.signature, entry);
   }
   const orderedSignatures = [...signatures.values()]
@@ -247,6 +262,7 @@ export async function getWalletTransactions(owner: Address): Promise<Transaction
 
   const history: Transaction[] = [];
   for (let index = 0; index < orderedSignatures.length; index += TRANSACTION_BATCH_SIZE) {
+    if (index > 0) await sleep(RPC_PACE_MS);
     const batch = orderedSignatures.slice(index, index + TRANSACTION_BATCH_SIZE);
     const parsedTransactions = await Promise.all(batch.map(async (entry) => {
       const response = await rpc().getTransaction(entry.signature as never, {

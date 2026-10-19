@@ -7,6 +7,7 @@ import { assetByMint, chain, type Address } from '../adapters';
 import { getDynamicClient } from '../dynamicClient';
 import type { Transaction } from '../types/wallet';
 import { parseWebPaymentUrl, type WebPaymentIntent } from '../services/webPaymentLink';
+import { fetchWalletIdentity, type WalletIdentity } from '../services/walletApi';
 
 function shortenAddress(address: string): string {
   if (address.length <= 12) return address;
@@ -31,6 +32,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
   const [isPaying, setIsPaying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
+  const [recipientIdentity, setRecipientIdentity] = useState<WalletIdentity | null>(null);
 
   const asset = useMemo(
     () => intent ? assetByMint(intent.mint, intent.cluster) : null,
@@ -69,6 +71,22 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
       cancelled = true;
     };
   }, [asset, intent, payerAddress]);
+
+  // Registered email of the collector, so "Pagar a" shows a human identity.
+  // Fails soft: the UI keeps the shortened address when the API is offline.
+  useEffect(() => {
+    let cancelled = false;
+    if (!intent?.recipient) {
+      setRecipientIdentity(null);
+      return;
+    }
+    void fetchWalletIdentity(intent.recipient).then((identity) => {
+      if (!cancelled) setRecipientIdentity(identity);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [intent?.recipient]);
 
   const handlePay = async () => {
     if (!intent || !asset || !payerWallet) {
@@ -206,27 +224,40 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
 
             <div className="mb-5 w-full rounded-2xl border border-white/10 bg-[#161619] p-4">
               <p className="mb-2 text-xs text-zinc-500">Pagar a</p>
-              <p className="font-mono text-sm text-zinc-200">{shortenAddress(intent.recipient)}</p>
-              <p className="mt-3 text-xs text-zinc-500">Red</p>
-              <p className="text-sm font-medium text-white">Solana {intent.cluster}</p>
+              <p className="font-mono text-sm text-zinc-200">
+                {recipientIdentity?.email ?? shortenAddress(intent.recipient)}
+              </p>
+              <p className="mt-3 text-xs text-zinc-500">Cadena/Moneda</p>
+              <p className="text-sm font-medium text-white">Solana/{asset?.symbol ?? 'USDC'}</p>
             </div>
 
-            <label className="mb-4 block w-full">
-              <span className="mb-2 block text-xs font-semibold text-zinc-300">Monto en USDC</span>
-              <input
-                className="h-14 w-full rounded-xl border border-white/10 bg-[#161619] px-4 text-right text-2xl font-semibold text-white outline-none focus:border-[#ff5a1f]"
-                disabled={intent.amount !== null || isPaying || signature !== null}
-                inputMode="decimal"
-                onChange={(event) => {
-                  setAmountInput(event.target.value);
-                  setError(null);
-                }}
-                value={amountInput}
-              />
-              {intent.amount === null && (
+            {intent.amount !== null ? (
+              /* Fixed amount: a centered, highlighted figure instead of an input. */
+              <div className="mb-4 block w-full">
+                <span className="mb-2 block text-xs font-semibold text-zinc-300 text-center">Monto a pagar</span>
+                <div className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-[#161619] py-4">
+                  <span className="text-sm font-semibold text-zinc-400">USD</span>
+                  <span className="text-4xl font-bold text-white tabular-nums">
+                    {intent.amount.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <label className="mb-4 block w-full">
+                <span className="mb-2 block text-xs font-semibold text-zinc-300">Monto en USDC</span>
+                <input
+                  className="h-14 w-full rounded-xl border border-white/10 bg-[#161619] px-4 text-right text-2xl font-semibold text-white outline-none focus:border-[#ff5a1f]"
+                  disabled={isPaying || signature !== null}
+                  inputMode="decimal"
+                  onChange={(event) => {
+                    setAmountInput(event.target.value);
+                    setError(null);
+                  }}
+                  value={amountInput}
+                />
                 <span className="mt-1 block text-[11px] text-zinc-500">El comercio permite elegir el monto.</span>
-              )}
-            </label>
+              </label>
+            )}
 
             <div className="mb-5 flex w-full justify-between rounded-xl bg-white/[0.04] px-4 py-3 text-sm">
               <span className="text-zinc-400">Tu saldo USDC</span>

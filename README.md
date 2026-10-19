@@ -1,481 +1,462 @@
-# ReWallet — Prototype UI
+# ReWallet — USDC payments on Solana
 
-Mobile-first wallet UI for ReWallet: read USDC balances, create and verify
-incoming USDC payment requests, and sign outgoing USDC transfers on **Solana
-devnet**. Built with React + TypeScript + Tailwind CSS v4.
+ReWallet is a consumer payments app for **USDC on Solana**: create an account
+with an email, get a wallet, and move money with the flows people already know —
+**cobrar** (charge with a QR/link), **pagar** (pay a request), **depositar**
+(receive), and **retirar** (send out). No seed phrases, no browser extensions:
+the wallet is embedded and the account is an email one-time code.
 
-> All wallet balances and payment confirmations are read from Solana RPC.
-> Outgoing transfers and withdrawals are signed by the Dynamic embedded wallet.
-> Deposits show the wallet address; the app does not simulate or automatically
-> credit deposits. Solana devnet tokens have no real value. Do not use for
-> production funds.
+This repository is the working prototype: a React + TypeScript mobile-first UI,
+an Express API with a SQLite ledger, and a Dynamic.xyz webhook pipeline that
+turns on-chain movements into balances, history, and notifications. Everything
+runs against **Solana devnet** (test tokens, no real value).
+
+> **Status:** functional prototype heading to private beta. The current stack
+> (SQLite + polling sweeper) is the monolith that migrates to PostgreSQL with
+> real-time updates before beta — see [Roadmap to beta](#roadmap-to-beta).
+
+---
+
+## Product features
+
+### Cobrar — Accept USDC with a QR or link
+
+The merchant sets an amount and a concept, and gets a shareable payment page
+plus a QR that encodes it. No transaction is signed to create a charge.
+
+**User flow**
+
+1. Transfer → **Cobrar por QR**.
+2. Enter the amount to charge (keypad) → **Continuar a Detalles**.
+3. Optionally add a concept ("Honorarios diseño…") → **Confirmar**.
+4. The screen renders the **QR card** (white card with amount and concept),
+   the **web link**, and share buttons (**Copiar Link**, **WhatsApp**).
+5. The cross on the generated QR returns straight to home.
+
+**How it is built**
+
+| Step | Code |
+|------|------|
+| Amount + concept form, QR render, link + share UI | `src/components/TransferFlow.tsx` (`link_amount` → `link_details` subflows) |
+| Payment URL construction (`/pay?recipient&mint&cluster&amount&message`) | `src/services/webPaymentLink.ts` |
+| QR rendering | `src/adapters/solana-pay.ts` (`chain.renderQrDataUrl`) |
+| Payment page route | `src/components/WebPaymentPage.tsx` (mounted at `/pay`) |
+
+The link is **self-contained** — it carries the request in its own query
+params, so charging works without server-side link storage. A deployed host
+must rewrite `/pay` to the SPA entry point over HTTPS.
+
+### Pagar — Pay a request from a link or QR
+
+The payer opens the link (or scans the QR), signs in with their own ReWallet
+account, reviews the request, and signs the USDC transfer with their embedded
+wallet.
+
+**User flow**
+
+1. Open the link / scan the QR → `/pay` → sign in with email OTP.
+2. The page shows: **Pagar a** (the collector's registered email, falling back
+   to a shortened address), **Cadena/Moneda** (`Solana/USDC`), and the amount —
+   a centered **USD {amount}** figure for fixed charges, an input for
+   merchant-defined free amount.
+3. The payer's live USDC balance is displayed; paying more than the balance or
+   paying yourself is blocked.
+4. **Pagar** → the wallet signs via Dynamic and submits to Solana.
+5. Both sides see the movement: the payer as a completed send, the collector
+   through the webhook pipeline (history + in-app notification).
+
+**How it is built**
+
+| Step | Code |
+|------|------|
+| URL parsing → typed `WebPaymentIntent` | `src/services/webPaymentLink.ts` |
+| Payment page UI, balance check, self-payment guard | `src/components/WebPaymentPage.tsx` |
+| Collector identity (email) | `GET /api/wallet/identity` (`src/services/walletApi.ts`) |
+| Cluster alignment + signing | `chain.ensureDynamicNetwork()` → Dynamic `transferAmount()` |
+| Confirmation for the collector | `POST /api/webhooks/dynamic` → `src/services/webhookIngestor.ts` |
+
+### Depositar — Receive USDC into your wallet
+
+Every account owns a Solana address. The deposit screen shows it as a QR and
+as text with a copy button; sending USDC to it on the configured network is
+enough. The balance updates automatically once the network confirms — there is
+no manual refresh button.
+
+**How updates arrive**
+
+1. The Dynamic webhook reports the incoming movement for the registered wallet.
+2. A periodic **sweeper** (`src/services/historySync.ts`, every 2 minutes by
+   default) backfills anything the webhook missed, by reading confirmed
+   on-chain history for the wallet's addresses.
+3. `GET /api/wallet/balances` serves the balance from a 15-second server cache
+   over a **paced** RPC budget (one in-flight request, 400 ms spacing) — the
+   UI never hammers the public RPC.
+
+**Code:** `src/components/DepositFlow.tsx`, `src/services/balanceCache.ts`,
+`src/services/historySync.ts`.
+
+### Retirar — Send USDC to any Solana address
+
+The user enters an amount, picks a destination, and signs. Same signing path
+as paying a request, but the destination is typed, pasted, scanned from a QR,
+or chosen from recent recipients — never yourself (self-transfers are blocked
+at every entry point).
+
+**User flow**
+
+1. Home → **Retirar**.
+2. Amount: keypad + a **0 → MAX slider** (drag or tap MAX). Over-balance is
+   blocked with "Balance insuficiente".
+3. Destination: paste an address (**Pegar**), scan a QR (**ScanLine**, address
+   mode), or pick a recent recipient. Your own wallet never appears in the
+   list.
+4. **Enviar** → Dynamic signs and submits; the transaction appears as
+   *pending* immediately from the local ledger, and the webhook flips it to
+   *completed* with a notification.
+
+**Code:** `src/components/WithdrawFlow.tsx`,
+`src/components/QrScannerFlow.tsx` (`mode="address"`),
+`POST /api/wallet/transactions/pending`.
+
+### Also in the app
+
+| Feature | Where | Notes |
+|---------|-------|-------|
+| **Transferir (P2P)** | `TransferFlow` | Same send path to contacts/recent recipients, with a note field |
+| **Notificaciones** | `NotificationsView` + `GET /api/wallet/notifications` | Fed by the webhook (sent/received movements); unread badge in the header |
+| **Comprobante (receipt)** | `TransactionReceiptModal` | Cadena/Moneda, Emisor/Receptor by **email**, explorer link, download/share |
+| **Actividad** | `AllTransactionsModal` | Full history from the local ledger (RPC fallback) |
+| **Perfil** | `SettingsView` | Email, wallet, language toggle (ES/EN), logout pinned at the bottom |
+| **Onboarding** | `DynamicAccountGate` | Email OTP + language picker; embedded Solana wallet created by Dynamic |
+
+---
 
 ## Quick start
 
 ```bash
 npm install --legacy-peer-deps
-cp .env.example .env.local
-# Set VITE_DYNAMIC_ENVIRONMENT_ID to your Dynamic environment ID in .env.local
-
-npm run dev
+cp .env.example .env.local   # then set the variables below
+npm run api                  # API + webhook server on :3001 (keep this terminal open)
+npm run dev                  # UI on :3000
 ```
 
-Open **http://localhost:3000**.
+Apply the schema once before the first API start:
+
+```bash
+npm run db:push
+```
+
+Open **http://127.0.0.1:3000**.
 
 ### Package manager
 
-**npm is the only supported package manager.** Use the command above verbatim.
-`--legacy-peer-deps` is required: the dependency tree carries peer conflicts
-that make a strict install fail.
+**npm is the only supported package manager.** `--legacy-peer-deps` is
+required: `@ecies/ciphers@0.2.6` requires `@noble/ciphers@^1.0.0` while
+`@dynamic-labs-wallet/forward-mpc-shared` needs `^0.4.1`; the explicit
+`@noble/ciphers: 1.3.0` devDependency satisfies the former at the root and npm
+nests `0.4.1` under the latter. Do not "clean this up". `npm ci` works from a
+clean checkout. `npm ls` reports one `invalid` optional peer (`esbuild` between
+Vite and `drizzle-kit`) — expected and harmless; Vite 8 builds through
+rolldown.
 
-`npm ci` works from a clean checkout, so prefer it in CI and for reproducible
-installs.
+### Dynamic setup (required)
 
-#### Why `@noble/ciphers` is pinned in devDependencies
-
-`@ecies/ciphers@0.2.6` (reached through `eciesjs` ->
-`@dynamic-labs-sdk/metamask`) declares `@noble/ciphers@^1.0.0` as a **required
-peer dependency**, while `@dynamic-labs-wallet/forward-mpc-shared` depends on
-`@noble/ciphers@^0.4.1`. npm can only hoist one of them, so the resolver used to
-place `0.4.1` at the root and leave `@ecies/ciphers` with an unsatisfied peer it
-cannot resolve on its own.
-
-The explicit `@noble/ciphers: 1.3.0` devDependency pins `1.3.0` at the root so
-the peer is satisfied, and npm nests `0.4.1` under `forward-mpc-shared`, which
-is what that package declares. Do not "clean this up" by promoting it to a
-regular dependency or by forcing a single global version.
-
-#### Known: `npm ls` reports one `invalid` esbuild entry
-
-`vite@8.3.4` lists `esbuild@^0.27.0 || ^0.28.0` as an **optional** peer, while
-this project depends on `esbuild@^0.25.0` (required by `drizzle-kit`) and
-`tsx` brings its own `0.28`. The root therefore holds `0.25.12` and `npm ls`
-flags the unmet optional peer. This is expected and harmless: the range pair is
-genuinely incompatible, Vite 8 builds through rolldown, and `npm run build`
-passes. Forcing a version would break `drizzle-kit` instead.
-
-### Before the first payment: point Dynamic at real Solana devnet
-
-This is the setup step most likely to send you down a wrong path. In the
-Dynamic console, the Solana network labelled **devnet** ships with **no public
-endpoint** ("This network has no public endpoint. Add your own."). If you leave
-it empty, Dynamic resolves that network to whatever endpoint is configured
-elsewhere — commonly an SVM L2 such as Eclipse — while this app talks to
-`api.devnet.solana.com`.
-
-The two disagree and the mismatch surfaces only at signing time, as
-`Attempt to debit an account but found no record of a prior credit`, even
-though the payer holds SOL and USDC. Network **names** are not network
-identities; see [Network alignment](#network-alignment-dynamic-vs-app).
-
-Set the devnet network RPC to `https://api.devnet.solana.com`, then hard-reload
-the browser — Dynamic caches network configuration on the client.
-
-Verify before funding anything:
+1. In the [Dynamic Console](https://console.dynamic.xyz/): enable **Email**
+   login, the **Solana/SVM** chain, and **Embedded Wallets** for Solana. Add
+   `http://127.0.0.1:3000` to allowed origins.
+2. Set `VITE_DYNAMIC_ENVIRONMENT_ID` in `.env.local`.
+3. **Point Dynamic's devnet network at `https://api.devnet.solana.com`.** The
+   bundled "devnet" entry ships with no public endpoint; if left empty,
+   Dynamic may resolve it to an SVM L2 (e.g. Eclipse) while this app reads
+   Solana devnet — the mismatch only surfaces at signing time as
+   `Attempt to debit an account but found no record of a prior credit`.
+   Hard-reload the browser after changing it.
 
 | Cluster | Genesis hash |
 |---------|--------------|
-| mainnet-beta | `5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d` |
 | devnet | `EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG` |
-| testnet | `4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY` |
+| mainnet-beta | `5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d` |
 | Eclipse | `EAQLJCV2mh23BsK2P9oYpV5CHVLDNHTxYss3URrNmg3s` |
 
-## Dynamic authentication and Solana wallet
+4. Create a **webhook** in the Dynamic console pointing to
+   `POST /api/webhooks/dynamic` on your API, and copy its signing secret to
+   `DYNAMIC_WEBHOOK_SECRET`. Without it, balances and history still work via
+   the sweeper, but confirmations and notifications are delayed.
 
-The app uses Dynamic's headless JavaScript SDK and its email one-time-code
-authentication flow. After sign-in, it creates a Dynamic embedded Solana wallet
-for the account and displays the wallet address in Settings. The environment ID
-is public client configuration; set it as `VITE_DYNAMIC_ENVIRONMENT_ID`.
+Users must exist in the local `users` table (seeded) for the webhook to
+project their movements — see [Known limitations](#known-limitations).
 
-In the [Dynamic Console](https://console.dynamic.xyz/), enable Email under
-**Log in & User Profile**, enable the Solana/SVM chain, and enable **Embedded
-Wallets** for Solana. Add the app's origin (for local development,
-`http://localhost:3000`) to the environment's allowed origins. This integration
-uses embedded wallets only; connecting external wallets and WalletConnect are
-not enabled.
-
-Implementation references: [React quickstart](https://www.dynamic.xyz/docs/javascript/reference/react-quickstart.md),
-[email OTP](https://www.dynamic.xyz/docs/javascript/authentication-methods/email.md),
-[Solana extensions](https://www.dynamic.xyz/docs/javascript/reference/solana/adding-solana-extensions.md),
-and [embedded wallet quickstart](https://www.dynamic.xyz/docs/javascript/wallets/embedded-wallets/quickstart.md).
+---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  UI (React + Tailwind)          src/components/*             │
-│  Header · BalanceCard · TransferFlow · DepositFlow ·         │
-│  WithdrawFlow · QrScannerFlow · SettingsView · Receipts      │
-└───────────────────────────┬──────────────────────────────────┘
-                            │  src/adapters/index.ts (barrel)
-                            ▼
-┌──────────────────────────────────────────────────────────────┐
-│  Solana Adapters (devnet)            src/adapters/*          │
-│  solana-client · solana-pay · token · payment-verify ·      │
-│  dynamic-network (cluster alignment guard)                   │
-└──────────────┬───────────────────────────────┬───────────────┘
-               │ @solana/kit + devnet RPC      │ Dynamic SDK (transferAmount)
+┌────────────────────────────────────────────────────────────────┐
+│  UI — React + Tailwind v4 (phone-frame prototype)              │
+│  src/components/*                                              │
+│  TransferFlow (cobrar/transferir) · WithdrawFlow · DepositFlow │
+│  WebPaymentPage (/pay) · QrScannerFlow · NotificationsView ·   │
+│  TransactionReceiptModal · SettingsView · DynamicAccountGate   │
+└──────────────┬───────────────────────────────┬─────────────────┘
+               │ src/adapters/index.ts         │ HTTP (src/services/walletApi.ts)
                ▼                               ▼
-┌──────────────────────────────┐  ┌────────────────────────────┐
-│  Solana devnet               │  │  Dynamic embedded wallet   │
-│  api.devnet.solana.com       │  │  provider → active cluster │
-└──────────────────────────────┘  └────────────────────────────┘
-        two independent cluster sources — reconciled before signing
+┌──────────────────────────────┐  ┌─────────────────────────────────────┐
+│  Solana adapters (devnet)    │  │  API — Express (server.ts, :3001)   │
+│  balance reads · ATA math ·  │  │  /api/webhooks/dynamic  (HMAC,      │
+│  QR encode/parse · cluster   │  │    idempotent ledger projection)    │
+│  alignment guard             │  │  /api/wallet/*  balances · history ·│
+└──────┬──────────────┬────────┘  │    pending · notifications ·        │
+       │ RPC          │ Dynamic   │    contacts · identity              │
+       ▼              ▼ SDK       │  sweeper: history backfill          │
+┌────────────┐ ┌────────────────┐ └──────────────┬──────────────────────┘
+│ Solana     │ │ Dynamic        │                ▼
+│ devnet RPC │ │ embedded       │  ┌─────────────────────────────────────┐
+│ (paced,    │ │ wallet         │  │  SQLite via Drizzle (data/rewallet) │
+│  cached)   │ │ (email OTP)    │  │  users · transactions · contacts ·  │
+└────────────┘ └────────────────┘  │  notifications · webhook_events · … │
+                                  └─────────────────────────────────────┘
 ```
 
-**Key principle:** UI never talks to Drizzle or `@solana/*` directly. Screens
-consume domain types in `src/types/wallet.ts` and `src/contracts/payments.ts`;
-the adapter barrel (`src/adapters/index.ts`) is the single entry point for
-Solana reads and payment verification. There is no offline/mock chain mode.
-Balances show native SOL and the aggregate USDC across the wallet's token
-accounts. Recents are loaded from confirmed Solana history for the wallet and
-its USDC token accounts, including incoming and outgoing movements; the history
-is fetched from RPC and is not persisted in SQLite. The optional SQLite API is
-separate and is not used for current wallet state or transaction history.
+**Principles**
 
-Note the two separate paths to the network: this app reads through
-`@solana/kit`, while signing happens inside the Dynamic SDK. They resolve the
-cluster independently, which is why `dynamic-network` sits between them.
+- The UI never talks to Drizzle or `@solana/*` directly. Chain access goes
+  through the adapter barrel (`src/adapters/index.ts`); persistence and the
+  ledger go through `src/services/walletApi.ts` → Express.
+- Two independent cluster sources (app config vs Dynamic's active network) are
+  reconciled by `chain.ensureDynamicNetwork()` before every signature, and it
+  **fails closed** on mismatch (genesis-hash prefix, not label).
+- There is no mock chain mode. Balances, history, and receipts come from
+  Solana; the SQLite ledger is a **projection** of it, not a substitute.
 
-## Solana Pay Integration
+### How a payment settles end-to-end
 
-| Feature | Component | Adapter | Status |
-|---------|-----------|---------|--------|
-| **Generate payment request** | `TransferFlow` | `createWebPaymentUrl()` | HTTPS app URL + QR; self-contained request data |
-| **Pay a web request** | `WebPaymentPage` | Dynamic `transferAmount()` | Authenticated payer reviews amount and signs USDC transfer |
-| **QR scanning** | `QrScannerFlow` | `parseWebPaymentUrl()` / `chain.parsePaymentRequest()` | Opens same-app web payment links; parses legacy Solana Pay requests |
-| **Recipient validation** | `TransferFlow` | `chain.verifyRecipient(addr, asset)` | Rejects unsafe account types and requests review for off-curve wallets |
-| **Balance reading** | `App` | `chain.getSolBalance()` + `chain.getBalance(wallet, USDC)` | SOL and aggregate USDC from live RPC |
-| **Transaction history** | `App` | `getWalletTransactions(wallet)` | Paginated confirmed SOL and USDC inflows/outflows from RPC |
-| **Outgoing USDC transfer / withdrawal** | `TransferFlow`, `WithdrawFlow` | Dynamic `transferAmount()` | Signed and submitted by the created Dynamic Solana wallet; destination must be a Solana address |
-| **Receive address** | `DepositFlow` | `chain.renderQrDataUrl(address)` | Wallet address QR; balance updates are read from RPC |
-| **Network alignment** | all signing paths | `chain.ensureDynamicNetwork()` | Fails closed when Dynamic's active cluster diverges from the app's |
-| **Fee attribution** | all signing paths | Dynamic `transferAmount()` | Payer pays the network fee and the recipient's ATA rent |
-
-On-chain transaction records retain the Solana signature and the associated
-Dynamic wallet address. For web payments, the payer's Dynamic wallet signs and
-the merchant's created wallet receives USDC.
-
-### Flow: Create → Open → Pay
-
-1. **Merchant** opens TransferFlow → "Generar link de pago" → enters amount/concept → "Confirmar"
-   - Builds an HTTPS `/pay` URL carrying recipient, cluster, USDC mint, amount (if fixed), and concept.
-   - QR encodes that web URL; creating it does not submit a transaction.
-2. **Payer** opens the link or scans the QR, signs in with their own Dynamic account, reviews the request and live USDC balance, then signs the transfer from their Solana wallet.
-3. **Merchant** refreshes the wallet history to see the confirmed incoming USDC movement.
-
-This prototype's web link is self-contained and does not require backend link
-storage. A deployed app must be reachable over HTTPS and its host must rewrite
-`/pay` routes to the SPA entry point. A local `127.0.0.1` link is only usable
-from the same machine. The web payment screen needs an app account and an
-adequately funded wallet; a standard Solana wallet app will not treat an HTTPS
-QR as a native Solana Pay request.
-
-The configured default RPC is public Solana devnet. The app does not currently
-support Solana testnet in its cluster type; use devnet for faucet-funded USDC
-and SOL testing. Devnet tokens have no real value. Before handling real funds,
-use a reliable RPC/indexing provider, persistent signature idempotency, and
-production-grade monitoring. See
-[Solana Payments](https://solana.com/docs/payments),
-[Solana Pay](https://docs.solanapay.com/spec), and
-[Production Readiness](https://solana.com/docs/tools/production-readiness).
-
-## Network alignment (Dynamic vs app)
-
-Two independent sources decide which Solana cluster a payment runs against:
-
-| Source | Origin | Used by |
-|--------|--------|---------|
-| The app | `VITE_SOLANA_CLUSTER` via `resolveNetworkConfig()` | Balance reads, recipient checks, link creation |
-| Dynamic | `walletProvider.getActiveNetworkId()` | `transferAmount()` — builds and signs the transaction |
-
-`walletAccount` selects the provider but does **not** select the network. A
-Dynamic environment with several SVM networks enabled can be connected to one of
-them while the app validates against another, and nothing in either SDK objects.
-The result is a transaction whose fee payer is an account with no balance on the
-network actually used.
-
-`src/adapters/dynamic-network.ts` closes that gap. Before any of the three
-signing paths (`WebPaymentPage.handlePay`, `TransferFlow.handleExecuteSend`,
-`WithdrawFlow.handleSend`), `chain.ensureDynamicNetwork()` compares the two and
-**fails closed**:
-
-```typescript
-const alignment = await chain.ensureDynamicNetwork(walletAccount);
-if (!alignment.ok) throw new Error(alignment.alignment.reason!);
+```
+Payer signs (Dynamic) ──► Solana devnet
+        │
+        ├─► sender UI: POST /api/wallet/transactions/pending   (row: pending)
+        │
+        └─► Dynamic webhook ──► POST /api/webhooks/dynamic
+                 │  HMAC-SHA256 over raw body (x-dynamic-signature-256)
+                 │  dedupe on webhook_events.message_id
+                 │  resolve subject wallets → registered users
+                 ▼
+            upsertTransactions (user_id, reference_id)   (pending → completed)
+                 ▼
+            insertNotification  (sender + recipient copies)
+                 ▼
+            both apps: history row flips to completed, bell badge increments
 ```
 
-Two details that matter:
+The **sweeper** (`SWEEPER_INTERVAL_MS`, default 120 s) replays confirmed
+on-chain history for every registered wallet through the same upsert path, so
+a missed webhook delays but never loses a movement. Balance reads are
+server-side with a 15 s cache and a paced RPC budget (`RPC_PACE_MS`), and
+sending flows bypass the cache with `?fresh=1`.
 
-- **Genesis hash is the primary signal, not the cluster label.** Dynamic labels
-  an SVM L2 as `devnet`; the app also calls Solana devnet `devnet`. A
-  label-only comparison reports them as aligned while funds sit on a chain the
-  transaction never reaches.
-- **Dynamic truncates genesis hashes to 31 characters.** Comparison uses a
-  prefix match with a 20-character floor, which still separates Solana devnet
-  from Eclipse — their hashes diverge at the second character.
+---
 
-When alignment cannot be confirmed the adapter returns `matchedBy: 'unknown'`
-and refuses to sign. It will attempt a programmatic `switchActiveNetwork()` when
-the provider exposes one and a matching network is configured.
+## Where the fees land
 
-### Where the fee lands
+`transferAmount()` builds the transaction so **the payer pays everything**:
 
-`transferAmount()` builds the transaction so that **the payer pays everything**:
+| Cost | Paid by |
+|------|---------|
+| Transaction fee (~0.000005 SOL) | Payer |
+| ATA creation rent (~0.00148844 SOL), only when the recipient has no token account | Payer |
 
-| Cost | Paid by | Notes |
-|------|---------|-------|
-| Transaction fee (~0.000005 SOL) | Payer | `feePayer` is the payer's own account |
-| ATA creation rent (~0.00148844 SOL) | Payer | Only when the recipient has no token account |
-
-This is why a merchant with a completely empty wallet can issue a payment link
-and still get paid: creating the recipient's associated token account is
-permissionless, so the payer funds it on the merchant's behalf. No fee-abstraction
-layer is required for that flow.
-
-Note the scale difference. Rent is ~298x the network fee, so the dominant cost of
-a payment to a first-time recipient is account creation, not gas. Fee sponsorship
-that covers only the network fee does not remove the need for SOL.
+A merchant with an empty wallet can still issue a charge link and get paid:
+creating the recipient's token account is permissionless, so the payer funds
+it. Rent is ~298× the network fee — fee sponsorship that only covers gas does
+not remove the need for SOL.
 
 ## Project layout
 
 ```
+server.ts                       # Express API: webhook, wallet, sweeper, SPA host
+drizzle.config.ts               # Drizzle Kit (SQLite dialect)
 src/
-├── adapters/                    # Solana chain access (single entry point)
-│   ├── index.ts                 # Live Solana access barrel
-│   ├── solana-client.ts         # RPC client singleton + cluster config
-│   ├── solana-pay.ts            # Solana Pay spec: encode/parse/QR/refs
-│   ├── token.ts                 # ATA derivation, balances, recipient check
-│   ├── dynamic-network.ts       # Dynamic-vs-app cluster alignment guard
-│   └── payment-verify.ts        # Verification, reference lookup, streaming
-├── components/                  # UI screens and flows
-│   ├── TransferFlow.tsx         # Send + Payment Link + Verify (real chain)
-│   ├── QrScannerFlow.tsx        # Camera + Barcode Detection + parse
-│   ├── BalanceCard.tsx          # USDC headline + SOL/USDC balances
-│   ├── DepositFlow.tsx          # Solana receive address + QR
-│   ├── WithdrawFlow.tsx         # Signed USDC transfer to Solana address
-│   ├── Header.tsx
-│   ├── BottomNav.tsx
-│   ├── Keypad.tsx
-│   ├── CoinIcon.tsx
-│   ├── RecentTransactions.tsx
-│   ├── AllTransactionsModal.tsx
-│   ├── TransactionReceiptModal.tsx
-│   ├── NotificationToast.tsx
-│   ├── PhoneFrame.tsx
-│   └── SettingsView.tsx
-├── contracts/                   # Pure types, zero SDK imports
-│   ├── payments.ts              # PaymentIntent, Receipt, Reference, errors
-│   └── tokens.ts                # TokenAsset, mint registry, conversions
+├── adapters/                   # Solana access — the only chain entry point
+│   ├── index.ts                # barrel consumed by the UI (chain.*)
+│   ├── solana-client.ts        # RPC client + cluster config
+│   ├── solana-pay.ts           # payment URL/QR encode-parse
+│   ├── token.ts                # ATA derivation, balances, recipient checks
+│   ├── dynamic-network.ts      # Dynamic vs app cluster alignment (fails closed)
+│   └── payment-verify.ts       # reference lookup, receipt verification
+├── components/                 # screens (see Product features)
+├── contracts/                  # pure types + mint registry (no SDK imports)
 ├── db/
-│   ├── schema.ts                # Drizzle schema (9 tables)
-│   ├── index.ts                 # SQLite connection + pragmas
-│   └── migrations/              # Generated SQL migrations (committed)
-├── i18n/translations.ts         # EN / ES strings
+│   ├── schema.ts               # 10 tables (ledger projection + app data)
+│   ├── index.ts                # SQLite connection + pragmas
+│   └── migrations/             # generated SQL (committed)
+├── i18n/
+│   ├── translations.ts         # ES/EN strings
+│   └── language.ts             # persisted language (gate ↔ app)
 ├── services/
-│   ├── wallet.ts                # Optional SQLite API data access
-│   ├── solanaHistory.ts         # Paginated SOL + USDC wallet history
-├── types/wallet.ts              # UI domain types (Transaction, Contact, etc.)
-└── App.tsx                      # Navigation + screen orchestration
-server.ts                        # Optional read-only SQLite API
-drizzle.config.ts                # Drizzle Kit config (SQLite dialect)
+│   ├── walletApi.ts            # UI → API client (fail-soft)
+│   ├── wallet.ts               # data access: ledger, notifications, contacts
+│   ├── webhookIngestor.ts      # HMAC verify, dedupe, movement + notification projection
+│   ├── balanceCache.ts         # paced RPC + 15 s cache for SOL/USDC
+│   ├── historySync.ts          # sweeper: on-chain history → ledger
+│   ├── webPaymentLink.ts       # /pay URL build/parse
+│   └── solanaHistory.ts        # paginated RPC history (fallback/backfill source)
+└── App.tsx                     # navigation + screen orchestration
 ```
 
 ## Database
 
-SQLite through Drizzle ORM. Schema mirrors a production MariaDB model with
-SQLite-compatible types (REAL for decimals, INTEGER epoch for timestamps, TEXT
-for enums and JSON).
+SQLite through Drizzle ORM, mirroring the production MariaDB model with
+SQLite-compatible types (`REAL` decimals, epoch `INTEGER` timestamps, `TEXT`
+enums/JSON). The ledger tables (`transactions`, `notifications`,
+`webhook_events`) are a **projection of Solana** — authoritative data is
+on-chain; the DB makes history, notifications, and balances fast and
+idempotent.
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Wallets, balances, handle, KYC status |
-| `contacts` | Per-user address book (includes `publicKey` for Solana) |
-| `transactions` | deposit / withdrawal / sent / received + Solana traceability |
-| `payment_links` | Charge links with Solana Pay reference |
-| `qr_scans` | Scanned QR tracking |
-| `user_settings` | Language, currency, security (1:1 with users) |
-| `fiat_rates` | USDC → fiat conversion history |
-| `notifications` | In-app notifications |
-| `audit_log` | Change audit trail |
-
-### Database scripts
+| `users` | Accounts: pubkey, handle, email, balances mirror, KYC status |
+| `transactions` | Projected movements (deposit/withdrawal/sent/received) + signatures, idempotent on `(user_id, reference_id)` |
+| `notifications` | In-app feed rows, linked to transactions |
+| `webhook_events` | Raw webhook deliveries, deduped on Dynamic's `message_id` |
+| `contacts` | Per-user address book |
+| `payment_links` | Charge links (schema ready; see limitations) |
+| `qr_scans` | Scanned-QR tracking |
+| `user_settings` | Language/currency/security (1:1) |
+| `fiat_rates` | USDC → fiat history |
+| `audit_log` | Change trail |
 
 | Script | Description |
 |--------|-------------|
 | `npm run db:generate` | Generate a migration from `schema.ts` |
-| `npm run db:migrate` | Apply pending migrations |
 | `npm run db:push` | Push schema directly (interactive TTY) |
-| `npm run db:studio` | Open Drizzle Studio |
+| `npm run db:migrate` | Apply pending migrations |
+| `npm run db:backfill` | Replay on-chain history into the ledger |
+| `npm run db:studio` | Drizzle Studio |
 
-### Migrating to MariaDB
+### Migration path to PostgreSQL
 
-| SQLite (prototype) | MariaDB (production) |
-|--------------------|----------------------|
+The schema is intentionally portable; the beta migration swaps the driver,
+not the model:
+
+| SQLite (prototype) | PostgreSQL (beta) |
+|--------------------|-------------------|
 | `REAL` | `DECIMAL(18,6)` |
-| `INTEGER` timestamp | `TIMESTAMP` |
+| `INTEGER` epoch timestamp | `TIMESTAMPTZ` |
 | `TEXT` enum | native `ENUM(...)` |
-| `TEXT` json | `JSON` |
-| `better-sqlite3` | `mysql2` driver |
+| `better-sqlite3` | `pg` (+ connection pool) |
+| in-process sweeper interval | `LISTEN/NOTIFY` + scheduled jobs |
 
-Change the driver in `src/db/index.ts` and the `dialect` in
-`drizzle.config.ts`, then regenerate migrations.
+Change the driver in `src/db/index.ts`, the `dialect` in `drizzle.config.ts`,
+regenerate migrations, and replace the polling sweeper with webhook-driven
+real-time updates (see [Roadmap to beta](#roadmap-to-beta)).
 
-## API endpoints
+## API
 
-These endpoints expose the optional SQLite-backed API only. The wallet UI does
-not use them as a source of balances, transactions, or payment confirmations.
+All routes are served by `server.ts` (default `http://127.0.0.1:3001`).
+The UI calls them through `src/services/walletApi.ts`, which fails soft so the
+app keeps working on-chain data alone.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/health` | Service status and active cluster |
-| GET | `/api/wallet` | Full snapshot: user, balance, transactions, contacts |
-| GET | `/api/wallet/transactions` | Transaction list |
-| GET | `/api/wallet/notifications` | Notifications + unread count |
-| PATCH | `/api/settings/language` | Persist the user language |
+| POST | `/api/webhooks/dynamic` | Dynamic webhook (HMAC-SHA256 verified, idempotent) |
+| GET | `/api/health` | Status + active cluster |
+| GET | `/api/wallet` | Full snapshot: user, balances, transactions, contacts |
+| GET | `/api/wallet/transactions?wallet=` | Projected history (RPC fallback lives client-side) |
+| POST | `/api/wallet/transactions/pending` | Record a just-signed transfer as pending |
+| GET | `/api/wallet/balances?wallet=&fresh=1` | Cached SOL/USDC; `fresh=1` bypasses the cache |
+| GET | `/api/wallet/notifications?wallet=` | Feed + unread count |
+| POST | `/api/wallet/notifications/read` | Mark all as read |
+| GET/POST | `/api/wallet/contacts` | Address book read / save recipient |
+| GET | `/api/wallet/identity?address=` | Registered email/handle for a pubkey |
+| PATCH | `/api/settings/language` | Persist the user's language |
 
 ## Environment
 
-Create `.env.local` (**do not commit**). These are the variables the code
-actually reads:
+`.env.local` (**do not commit**):
 
 ```env
-# Required
+# ── Required (client) ─────────────────────────────────────────────
 VITE_DYNAMIC_ENVIRONMENT_ID=your_dynamic_environment_id
 
-# Public origin for shareable payment pages. Leave empty locally: the app then
-# builds links from window.location.origin, which only resolves on the machine
-# that generated them.
+# ── Required (server) for real-time confirmations ─────────────────
+# Signing secret of the Dynamic webhook; HMAC-SHA256 over the raw body.
+DYNAMIC_WEBHOOK_SECRET=your_dynamic_webhook_secret
+
+# ── Optional (client) ─────────────────────────────────────────────
+# Public origin for shareable /pay links; empty = window.location.origin.
 VITE_PUBLIC_APP_URL=
-
-# Solana cluster. "devnet" (default) or "mainnet-beta".
-VITE_SOLANA_CLUSTER=devnet
-
-# RPC overrides. Empty falls back to the public cluster endpoints, which are
-# rate-limited and have no SLA — use a dedicated provider beyond a demo.
-VITE_SOLANA_RPC=
+VITE_SOLANA_CLUSTER=devnet          # devnet | mainnet-beta
+VITE_SOLANA_RPC=                    # empty = public cluster endpoint
 VITE_SOLANA_RPC_WS=
 
-# Optional, read-only SQLite API only (npm run api)
+# ── Optional (server) ─────────────────────────────────────────────
 API_PORT=3001
 API_HOST=127.0.0.1
 DATABASE_URL=./data/rewallet.db
+SOLANA_RPC_URL=https://api.devnet.solana.com   # balance cache source
+USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+RPC_PACE_MS=400                     # spacing between RPC reads
+BALANCE_CACHE_TTL_MS=15000          # balance cache lifetime
+SWEEPER_INTERVAL_MS=120000          # history backfill cadence
+SWEEPER_DISABLED=1                  # set to disable the sweeper
 ```
 
-> **`.env.example` is out of date.** It still carries `GEMINI_API_KEY` and
-> `APP_URL` from an AI-Studio template — neither is imported anywhere in this
-> repo — and it omits the three Solana network variables above. Copy the block
-> from this section instead, or fix `.env.example` before relying on it.
+> **`.env.example` is out of date** (it still carries template variables).
+> Copy the block above instead.
 
 ## Scripts
 
 | Script | Description |
 |--------|-------------|
-| `npm run dev` | Vite dev server (port 3000) |
-| `npm run api` | Express API with watch (port 3001) |
+| `npm run dev` | Vite dev server (:3000) |
+| `npm run api` | Express API with watch (:3001) |
 | `npm run api:start` | Express API once (no watch) |
 | `npm run build` | Production build (`dist/`) |
 | `npm run preview` | Preview production build |
 | `npm run lint` | TypeScript check (`tsc --noEmit`) |
-| `npm test` | Solana Pay URL and payment-verification regression tests |
-| `npm run clean` | Remove `dist/` and `server.js` |
-
-## Key implementation details
-
-### Adapter barrel (`src/adapters/index.ts`)
-
-```typescript
-// Single entry point — UI imports ONLY from here
-import { chain } from '@/adapters';
-
-chain.network()       // { cluster, rpcUrl, rpcSubscriptionsUrl }
-
-// Payment URL/QR generation
-chain.createPaymentRequest({ recipient, amount, asset, reference, label, message })
-chain.generateReference()
-chain.parsePaymentRequest(rawUrl)
-chain.renderQrSvg(url)
-chain.renderQrDataUrl(url)
-
-// Balances (always read from the configured Solana RPC)
-await chain.getBalance(owner, asset)
-
-// Accounts
-await chain.deriveAta(owner, asset)
-await chain.verifyRecipient(recipient, asset)   // { ok, classified, canReceive, reason }
-await chain.classifyAddress(addr)
-
-// Verification
-await chain.verifyPayment(reference, asset, recipient, expectedAmount)
-await chain.findReferenceTransactions(reference)
-chain.watchTokenAccount(owner, asset, onEvent, options)
-
-// Commitment helpers
-chain.meetsCommitment(observed, required)
-chain.createInMemoryLedger()   // Utility only; production needs persistent idempotency
-```
-
-### Supported assets (devnet)
-
-Only **USDC** is available on devnet (Circle's `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`).
-USDT, PYUSD, USDG are mainnet-only — registry in `src/contracts/tokens.ts`.
-
-### Token program awareness
-
-The adapter derives ATAs with the **correct token program** per mint:
-- `spl-token` (Tokenkeg...) → USDC, USDT
-- `token-2022` (TokenzQdB...) → PYUSD, USDG
-
-Using the wrong program produces a different, unusable address.
-
-### Verification strategy (per Solana docs)
-
-1. `getSignaturesForAddress(reference)` — finds txs mentioning the reference
-2. `getTransaction(sig, { encoding: 'jsonParsed' })` — inspects pre/post token balances
-3. Computes `delta` on merchant's ATA → confirms credit
-4. Checks `confirmationStatus` ≥ `confirmed` (default) or `finalized`
-5. Validates `mint` matches expected asset (prevents fake "USDC")
-6. Returns `PaymentReceipt` with signature, slot, commitment, amount, and verified payer address
+| `npm test` | Regression tests (see limitations) |
+| `npm run db:*` | Drizzle generate/push/migrate/studio + `db:backfill` |
 
 ## Known limitations
 
-These are real and deliberately left in place; they are not bugs to fix later.
+Deliberate prototype constraints — tracked, not accidental:
 
-- **A payment link is replayable.** The `/pay` URL carries recipient, mint,
-  cluster, amount and message — but no reference, nonce, id or expiry. Nothing
-  distinguishes payment A from payment B toward the same address, and the only
-  replay guard (`isSelfPayment`) is client-side within one session. Enforcing
-  single use requires persisting `payment_links`, which is already modelled in
-  `src/db/schema.ts` and never written.
-- **Fee data is designed but unused.** `transactions.fee_usdc` and
-  `fee_payer` (default `'protocol'`) exist in the schema and are never written.
-  `i18n.translations.ts` carries a `chargeFee` string that is never rendered.
-  This is unimplemented intent, not a bug.
-- **The SQLite API is unreachable from the UI.** `server.ts` exposes five
-  endpoints on port 3001; no code under `src/` calls them. The database has the
-  schema applied and zero rows, so four of the five endpoints return 404. Start
-  it only if you want to develop against it.
-- **i18n covers half the app.** `TransferFlow`, `WithdrawFlow`, `DepositFlow`,
-  `TransactionReceiptModal` and `AllTransactionsModal` hardcode Spanish strings
-  and never read the translations module.
-- **`npm test` does not run** on Node 22.21 — the built-in runner fails with
-  `Missing internal module 'internal/deps/brace-expansion'` before loading any
-  test file. Pre-existing and unrelated to application code.
+- **Links are replayable.** `/pay` carries recipient/mint/cluster/amount/message
+  but no reference or expiry; nothing binds a link to a single settlement.
+  `payment_links` is modelled in the schema for the beta fix.
+- **User provisioning is manual.** The webhook and ledger only project
+  movements for pubkeys present in `users` (seeded for the prototype). Beta
+  registers the user row at sign-up.
+- **SQLite + polling.** One process, one file. The sweeper (2 min) plus the
+  15 s balance cache are the prototype's stand-ins for a real database with
+  real-time propagation.
+- **Devnet only.** USDC mint `4zMMC9…ncDU`; public RPC endpoints are
+  rate-limited and have no SLA.
+- **i18n is partial.** Onboarding, home chrome, and settings are ES/EN;
+  several flows hardcode Spanish.
+- **`npm test` fails on Node 22.21** before loading any test file
+  (`Missing internal module 'internal/deps/brace-expansion'`) — pre-existing
+  runner issue, unrelated to application code.
 
-## Roadmap (remaining)
+## Roadmap to beta
 
-1. **Single-use links** — persist `payment_links` and attach a per-link on-chain
-   reference, so a link settles once and reconciles against a specific payment
-2. **Fee abstraction** — let a payer settle in USDC without holding SOL. The
-   network fee is sponsorable; account-creation rent is not, and it is ~298x
-   larger
-3. **History persistence** — persist verified on-chain transactions without
-   treating unverified activity as a receipt
-4. **Deposit monitoring** — detect incoming transfers and verify confirmations
-   without requiring a manual balance refresh
-5. **RPC provider** — move off the public devnet endpoint, which is rate-limited
-   and has no SLA
-6. **MariaDB** — swap the Drizzle driver and run the production schema
+The prototype is a **monolith on purpose** — one process that proves the
+product loop before infrastructure work. The path to the first beta users:
+
+1. **PostgreSQL ledger** — swap SQLite for Postgres (schema already portable,
+   see [Migration path](#migration-path-to-postgresql)); the webhook
+   projection and idempotency keys carry over unchanged.
+2. **Real-time propagation** — replace the polling sweeper and client
+   refetches with `LISTEN/NOTIFY` → SSE to the UI: balances, history rows, and
+   notification badges update as the webhook lands, with the sweeper demoted
+   to an audit/repair job.
+3. **User registration at sign-up** — insert the `users` row on first Dynamic
+   login so every account is projectable by the webhook from day one.
+4. **Single-use payment links** — persist `payment_links` with an on-chain
+   reference per charge so a link settles once and reconciles exactly.
+5. **Mainnet + production RPC** — move off public devnet endpoints to a
+   dedicated provider; enable mainnet USDC.
+6. **Fee abstraction** — sponsor the network fee so payers can settle in
+   USDC without holding SOL (rent remains payer-funded by design).
 
 ## License
 

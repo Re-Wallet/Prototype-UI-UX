@@ -13,7 +13,6 @@ import {
   Check,
   Share2,
   Sparkles,
-  AlertCircle,
   X,
 } from 'lucide-react';
 import { Keypad } from './Keypad';
@@ -27,6 +26,12 @@ import {
   type TokenAsset,
 } from '../adapters';
 import { createWebPaymentUrl } from '../services/webPaymentLink';
+import {
+  fetchRecentRecipients,
+  registerPendingTransfer,
+  registerRecipient,
+  type RecentRecipient,
+} from '../services/walletApi';
 
 interface TransferFlowProps {
   balance: number;
@@ -35,8 +40,6 @@ interface TransferFlowProps {
   solanaWallet?: SolanaWalletAccount;
   onClose: () => void;
   onTransferComplete: (transaction: Transaction) => void;
-  initialMode?: 'send' | 'payment_link';
-  initialRecipient?: string;
   onSubflowChange?: (inSubflow: boolean) => void;
 }
 
@@ -47,32 +50,22 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   solanaWallet,
   onClose,
   onTransferComplete,
-  initialMode = 'send',
-  initialRecipient,
   onSubflowChange,
 }) => {
   // Subflow mode: 'main', 'amount', 'confirm', 'success', 'link_amount', 'link_details'
   const [subflow, setSubflow] = useState<
     'main' | 'amount' | 'confirm' | 'success' | 'link_amount' | 'link_details'
-  >(
-    initialMode === 'payment_link'
-      ? 'link_amount'
-      : initialRecipient
-      ? 'amount'
-      : 'main'
-  );
+  >('main');
 
   useEffect(() => {
     onSubflowChange?.(subflow !== 'main');
   }, [subflow, onSubflowChange]);
 
   // Send P2P state
-  const [recipient, setRecipient] = useState<string>(initialRecipient || '');
-  const [recipientName, setRecipientName] = useState<string>(initialRecipient || '');
-  const [recipientSolanaAddress, setRecipientSolanaAddress] = useState<string | null>(
-    initialRecipient && chain.isBase58(initialRecipient) ? initialRecipient : null
-  );
-  const [searchQuery, setSearchQuery] = useState<string>(initialRecipient || '');
+  const [recipient, setRecipient] = useState<string>('');
+  const [recipientName, setRecipientName] = useState<string>('');
+  const [recipientSolanaAddress, setRecipientSolanaAddress] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [sendAmountStr, setSendAmountStr] = useState<string>('0');
   const [note, setNote] = useState<string>('');
   const [isSending, setIsSending] = useState<boolean>(false);
@@ -96,36 +89,28 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
 
   const merchantWallet = solanaWallet?.address as Address | undefined;
 
-  const handleCustomRecipient = async () => {
-    if (!searchQuery.trim()) return;
+  // Recent recipient: jumps straight to the amount keypad. Pre-validates in
+  // the background so the send button gating still works on the confirm step.
+  const handleSelectRecent = async (entry: RecentRecipient) => {
     setSendError(null);
-
-    const address = searchQuery.trim();
-    if (!chain.isBase58(address)) {
-      setSendError('Ingresa una dirección pública Solana válida para enviar USDC.');
+    // Self-payouts are rejected everywhere: paying your own wallet only
+    // burns a fee for a no-op.
+    if (solanaWallet && entry.address === solanaWallet.address) {
+      setSendError('No podés transferir a tu propia wallet. Elegí a otra persona.');
       return;
     }
+    setRecipient(entry.email ?? entry.address);
+    setRecipientName(entry.email ?? entry.name ?? entry.address);
+    setRecipientSolanaAddress(entry.address);
 
-    if (!paymentAsset) {
-      setSendError(`USDC no está configurado para ${chain.network().cluster}.`);
-      return;
-    }
-
-    try {
-      const result = await chain.verifyRecipient(address as Address, paymentAsset);
-      setRecipientValidation({ ok: result.ok, reason: result.reason || undefined });
-      if (!result.ok) {
-        setSendError(result.reason ?? 'La dirección no puede recibir USDC.');
-        return;
+    if (paymentAsset) {
+      try {
+        const result = await chain.verifyRecipient(entry.address as Address, paymentAsset);
+        setRecipientValidation({ ok: result.ok, reason: result.reason || undefined });
+      } catch {
+        setRecipientValidation(null);
       }
-    } catch (error) {
-      setSendError(error instanceof Error ? error.message : String(error));
-      return;
     }
-
-    setRecipient(address);
-    setRecipientName(address);
-    setRecipientSolanaAddress(address);
     setSubflow('amount');
   };
 
@@ -146,6 +131,10 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
     }
     if (!recipientSolanaAddress || !paymentAsset) {
       setSendError('Selecciona una wallet Solana válida para recibir el envío.');
+      return;
+    }
+    if (recipientSolanaAddress === solanaWallet.address) {
+      setSendError('No podés transferir a tu propia wallet. Elegí a otra persona.');
       return;
     }
 
@@ -180,6 +169,27 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
         },
       }, getDynamicClient());
       setSubmittedSignature(transactionHash);
+      // Persist the recipient so it shows up as "recent" next time.
+      // Fails soft: the send already succeeded on-chain.
+      await registerRecipient(
+        solanaWallet.address,
+        recipientSolanaAddress,
+        recipientName && recipientName !== recipientSolanaAddress
+          ? recipientName
+          : undefined
+      );
+      // Record the transfer as `pending` in the local DB so the sender's
+      // history survives a reload before the webhook or sweep lands. The
+      // webhook later upserts the same row as `completed`. Fails soft.
+      void registerPendingTransfer({
+        wallet: solanaWallet.address,
+        signature: transactionHash,
+        counterpartyPubkey: recipientSolanaAddress,
+        amountUsdc: Number(sendAmount.toFixed(paymentAsset.decimals)),
+        assetSymbol: paymentAsset.symbol === 'SOL' ? 'SOL' : 'USDC',
+        note: note || undefined,
+      });
+      void loadRecentRecipients();
       onTransferComplete({
         id: `tx-${Date.now()}`,
         title: recipientName,
@@ -257,6 +267,21 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
 
   const [recipientValidation, setRecipientValidation] = useState<{ ok: boolean; reason?: string } | null>(null);
 
+  // Recent recipients (address book), loaded from the local wallet API.
+  const [recentRecipients, setRecentRecipients] = useState<RecentRecipient[]>([]);
+
+  const loadRecentRecipients = async () => {
+    if (!solanaWallet?.address) {
+      setRecentRecipients([]);
+      return;
+    }
+    setRecentRecipients(await fetchRecentRecipients(solanaWallet.address));
+  };
+
+  useEffect(() => {
+    void loadRecentRecipients();
+  }, [solanaWallet?.address]);
+
   // 1. AMOUNT KEYPAD FOR SENDING
   if (subflow === 'amount') {
     return (
@@ -316,30 +341,13 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
               </div>
               <div>
                 <p className="text-sm font-semibold text-white">{recipientName}</p>
-                <p className="text-xs text-[#ff5a1f] font-mono">{recipient}</p>
+                <p className="text-xs text-[#ff5a1f] font-mono">
+                  {recipientSolanaAddress
+                    ? `${recipientSolanaAddress.slice(0, 6)}…${recipientSolanaAddress.slice(-4)}`
+                    : recipient}
+                </p>
               </div>
             </div>
-
-            {recipientValidation && (
-              <div className={`p-3 rounded-xl text-xs ${
-                recipientValidation.ok 
-                  ? 'bg-[#10b981]/20 border border-[#10b981]/30 text-[#26e5c8]' 
-                  : 'bg-red-900/20 border border-red-900/30 text-red-400'
-              }`}>
-                <div className="flex items-center gap-1.5">
-                  {recipientValidation.ok ? (
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                  ) : (
-                    <AlertCircle className="w-3.5 h-3.5" />
-                  )}
-                  <span>
-                    {recipientValidation.ok 
-                      ? 'Destinatario válido para USDC' 
-                      : `Advertencia: ${recipientValidation.reason || 'Dirección no válida'}`}
-                  </span>
-                </div>
-              </div>
-            )}
 
             <div>
               <label className="text-xs font-medium text-zinc-400 block mb-1">
@@ -357,20 +365,17 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             <div className="pt-2 text-xs text-zinc-400 space-y-1">
               <div className="flex justify-between">
                 <span>Comisión de red</span>
-                <span className="text-zinc-300 font-medium">Se paga en SOL</span>
+                <span className="text-zinc-300 font-medium">≈ 0.000005 SOL</span>
               </div>
               <div className="flex justify-between">
                 <span>Liquidación</span>
-                <span className="text-zinc-300 font-medium">Solana</span>
+                <span className="text-zinc-300 font-medium">{sendAmount.toFixed(2)} USDC</span>
               </div>
             </div>
           </div>
         </div>
 
         <div className="pt-4 pb-2">
-          <p className="text-xs text-amber-300 text-center mb-3">
-            Tu wallet Solana {solanaWallet?.address.slice(0, 6)}…{solanaWallet?.address.slice(-4)} firmará este envío. Asegúrate de tener saldo USDC y SOL para la comisión.
-          </p>
           {sendError && (
             <p role="alert" className="text-xs text-red-400 text-center mb-3">
               {sendError}
@@ -389,9 +394,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             ) : (
               <>
                 <Send className="w-4 h-4" />
-                <span>
-                {`Firmar y enviar · ${sendAmount.toFixed(2)} USDC`}
-                </span>
+                <span>Enviar</span>
               </>
             )}
           </button>
@@ -410,7 +413,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
           </div>
 
           <h2 className="text-2xl font-bold text-white mb-2 tracking-tight">
-            Envío enviado a Solana
+            Envío aprobado
           </h2>
           <p className="text-sm text-zinc-400 mb-6">
             La transacción fue firmada con tu wallet Solana creada por Dynamic. Espera la confirmación de la red.
@@ -423,25 +426,29 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             </div>
             <div className="flex justify-between text-xs">
               <span className="text-zinc-400">Destinatario</span>
-              <span className="text-white">{recipient}</span>
+              <span className="text-white">{recipientName || recipient}</span>
             </div>
             <div className="flex justify-between text-xs">
               <span className="text-zinc-400">Nota</span>
               <span className="text-zinc-300">{note}</span>
             </div>
-            <div className="flex justify-between text-xs pt-1 border-t border-white/5">
-              <span className="text-zinc-400">Estado</span>
-              <span className="text-[#26e5c8] font-bold">Firmado · enviado a Solana</span>
-            </div>
-            {submittedSignature && (
-              <a
-                href={chain.explorerTxUrl(submittedSignature)}
-                target="_blank"
-                rel="noreferrer"
-                className="block break-all pt-1 text-xs text-[#26e5c8] underline"
-              >
-                Ver firma de transacción
-              </a>
+            {submittedSignature ? (
+              <div className="flex justify-between items-center text-xs pt-1 border-t border-white/5">
+                <span className="text-zinc-400">Estado</span>
+                <a
+                  href={chain.explorerTxUrl(submittedSignature)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[#26e5c8] font-bold underline"
+                >
+                  Ver estado de la transacción
+                </a>
+              </div>
+            ) : (
+              <div className="flex justify-between text-xs pt-1 border-t border-white/5">
+                <span className="text-zinc-400">Estado</span>
+                <span className="text-[#26e5c8] font-bold">Firmado · enviado a Solana</span>
+              </div>
             )}
           </div>
         </div>
@@ -451,7 +458,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             onClick={onClose}
             className="w-full h-13 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-[15px] transition-all cursor-pointer"
           >
-            Volver a la Billetera
+            Terminar
           </button>
         </div>
       </div>
@@ -478,7 +485,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             setSubflow('link_details');
           }}
           onBack={() => setSubflow('main')}
-          title="Generar Link de Pago"
+          title="Cobrar por QR"
         />
       </div>
     );
@@ -493,16 +500,11 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             {qrGenerated && paymentRequest ? (
               <>
                 <div className="w-12" />
-                <h1 className="text-[17px] font-semibold text-white tracking-tight">Link de Pago</h1>
+                <h1 className="text-[17px] font-semibold text-white tracking-tight">Cobrar por QR</h1>
                 <button
-                  onClick={() => {
-                    setQrGenerated(false);
-                    setCopiedLink(false);
-                    setPaymentRequest(null);
-                    setQrError(null);
-                  }}
+                  onClick={onClose}
                   className="flex items-center justify-center w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors cursor-pointer"
-                  aria-label="Cerrar link generado"
+                  aria-label="Cerrar QR generado"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -522,7 +524,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                   <ArrowLeft className="w-5 h-5" />
                   <span>Atras</span>
                 </button>
-                <h1 className="text-[17px] font-semibold text-white tracking-tight">Link de Pago</h1>
+                <h1 className="text-[17px] font-semibold text-white tracking-tight">Cobrar por QR</h1>
                 <div className="w-12" />
               </>
             )}
@@ -646,6 +648,20 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   }
 
   // 6. MAIN VIEW
+  // Live filter for the contacts list (email, name, handle, or address).
+  // Your own wallet is never offered: recommending yourself always dead-ends
+  // on the self-payout guard in handleSelectRecent/handleExecuteSend.
+  const searchLower = searchQuery.trim().toLowerCase();
+  const filteredRecipients = recentRecipients
+    .filter((entry) => !solanaWallet || entry.address !== solanaWallet.address)
+    .filter((entry) =>
+      searchLower
+        ? [entry.email, entry.name, entry.handle, entry.address]
+            .filter((field): field is string => Boolean(field))
+            .some((field) => field.toLowerCase().includes(searchLower))
+        : true
+    );
+
   return (
     <div className="flex flex-col h-full justify-between text-white px-5 pt-3 pb-24 overflow-y-auto select-none">
       <div>
@@ -663,29 +679,20 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
 
         <div className="mb-4">
           <label className="text-[14px] font-semibold text-zinc-300 block mb-2">
-            Dirección Solana de destino
+            Busca tu contacto
           </label>
           <div className="w-full h-12 rounded-2xl bg-white flex items-center px-4 shadow-sm">
             <Search className="w-5 h-5 text-zinc-600 mr-2.5 shrink-0" />
             <input
               type="text"
-              placeholder="Pega una dirección pública Solana"
+              placeholder="Buscar contacto por correo o nombre"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setSendError(null);
               }}
-              onKeyDown={(e) => e.key === 'Enter' && handleCustomRecipient()}
-              className="w-full bg-transparent text-black text-xs font-mono placeholder:text-zinc-500 placeholder:font-sans placeholder:text-sm font-normal outline-none"
+              className="w-full bg-transparent text-black text-sm placeholder:text-zinc-500 font-normal outline-none"
             />
-            {searchQuery.trim().length > 0 && (
-              <button
-                onClick={handleCustomRecipient}
-                className="px-2.5 py-1 rounded-lg bg-[#ff5a1f] text-white text-xs font-semibold shrink-0 cursor-pointer"
-              >
-                Continuar
-              </button>
-            )}
           </div>
           {sendError && (
             <p role="alert" className="mt-2 text-xs text-red-400">{sendError}</p>
@@ -694,6 +701,41 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             El envío se firmará desde {solanaWallet?.address.slice(0, 6)}…{solanaWallet?.address.slice(-4)} en {chain.describeNetwork()}.
           </p>
         </div>
+
+        {filteredRecipients.length > 0 && (
+          <div className="mt-5">
+            <p className="text-[15px] font-semibold text-white tracking-tight mb-1">
+              Billeteras recientes
+            </p>
+            <div className="divide-y divide-white/[0.04]">
+              {filteredRecipients.map((entry) => (
+                <button
+                  key={entry.id}
+                  onClick={() => handleSelectRecent(entry)}
+                  className="w-full flex items-center justify-between py-3.5 px-1 hover:bg-white/[0.02] active:bg-white/[0.05] rounded-xl transition-colors text-left group"
+                >
+                  <div className="flex items-center gap-3.5 min-w-0">
+                    <div className="shrink-0">
+                      <div className="w-10 h-10 rounded-full bg-[#222225] flex items-center justify-center text-white/90 group-hover:text-white transition-colors">
+                        <span className="text-[15px] font-semibold">
+                          {(entry.email ?? entry.name).charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="min-w-0 pr-2">
+                      <p className="text-[14px] font-medium text-white truncate leading-snug">
+                        {entry.email ?? entry.name}
+                      </p>
+                      <p className="text-[12px] font-normal font-mono leading-snug truncate text-zinc-500">
+                        {entry.address}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mb-3 mt-4">
           <button
@@ -712,7 +754,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
                 <LinkIcon className="w-5 h-5 stroke-[2.2]" />
               </div>
               <h3 className="text-[15px] font-semibold text-white leading-snug">
-                Generar link de pago
+                Cobrar por QR
               </h3>
             </div>
             <ArrowRight className="w-5 h-5 text-[#26e5c8] group-hover:translate-x-1 transition-transform" />

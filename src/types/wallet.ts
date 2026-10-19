@@ -6,6 +6,8 @@ export interface Transaction {
   id: string;
   title: string;
   counterparty?: string;
+  /** Registered email of the counterparty wallet, when it is a ReWallet user. */
+  counterpartyEmail?: string | null;
   type: TransactionType;
   status: TransactionStatus;
   amount: number; // in USDC

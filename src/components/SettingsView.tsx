@@ -20,7 +20,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   solanaAddress,
 }) => {
   return (
-    <div className="px-5 pt-3 pb-28 text-white select-none">
+    <div className="h-full flex flex-col px-5 pt-3 pb-8 text-white select-none overflow-y-auto">
       {/* First Div: Profile Avatar, Name, and Tag */}
       <div className="flex flex-col items-center justify-center p-6 rounded-3xl bg-[#18181b] border border-white/5 mb-5 text-center">
         <div className="w-18 h-18 rounded-full bg-[#ff1f71] flex items-center justify-center text-white text-3xl font-bold shadow-lg shadow-[#ff1f71]/20 mb-3 select-none">
@@ -85,8 +85,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* Cerrar Sesión Button */}
-      <div className="pt-2">
+      {/* Cerrar Sesión Button — pinned to the bottom of the profile screen */}
+      <div className="mt-auto pt-4">
         <button
           onClick={onLogout}
           className="w-full h-12 rounded-2xl bg-[#221515] hover:bg-[#2e1919] active:scale-[0.98] border border-red-900/40 text-red-400 font-semibold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"

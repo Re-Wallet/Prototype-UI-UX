@@ -6,13 +6,19 @@ import { Transaction } from '../types/wallet';
 interface TransactionReceiptModalProps {
   transaction: Transaction | null;
   onClose: () => void;
-  onRepeatTransaction?: (tx: Transaction) => void;
+  /** Email of the signed-in user, whose wallet owns this history. */
+  userEmail?: string | null;
+}
+
+/** "AbcdEf…1234" — readable identity when a wallet has no registered email. */
+function shortenAddress(value: string): string {
+  return value.length <= 14 ? value : `${value.slice(0, 6)}…${value.slice(-4)}`;
 }
 
 export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = ({
   transaction,
   onClose,
-  onRepeatTransaction,
+  userEmail,
 }) => {
   const [copied, setCopied] = useState<boolean>(false);
   const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
@@ -27,6 +33,23 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
   // the former and fall back for records that only carry the legacy field.
   const signature = transaction.txHash || transaction.referenceId || null;
   const explorerUrl = signature ? chain.explorerTxUrl(signature) : null;
+
+  // Emisor/Receptor depend on the direction of the movement: for an outgoing
+  // one the signed-in wallet is the emitter, for an incoming one it is the
+  // receiver. The counterparty shows its registered email when it is a
+  // ReWallet user, and falls back to a shortened address otherwise.
+  const isOutgoing = transaction.type === 'sent' || transaction.type === 'withdrawal';
+  const counterpartyIdentity =
+    transaction.counterpartyEmail ??
+    (transaction.counterparty ? shortenAddress(transaction.counterparty) : null);
+  const ownIdentity =
+    userEmail ?? (transaction.walletAddress ? shortenAddress(transaction.walletAddress) : null);
+  const emisorIdentity = isOutgoing ? ownIdentity : counterpartyIdentity;
+  const receptorIdentity = isOutgoing ? counterpartyIdentity : ownIdentity;
+
+  // "Cadena/Moneda": the product runs on Solana only; assetSymbol is the
+  // on-chain token of this movement (legacy rows default to USDC).
+  const chainAssetLabel = `Solana/${transaction.assetSymbol ?? 'USDC'}`;
 
   const handleCopyId = () => {
     setCopied(true);
@@ -104,30 +127,26 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
           </div>
         </div>
 
-        {/* Details Grid */}
+        {/* Details Grid — order: Cadena/Moneda, Emisor, Receptor, Explorador, Estado */}
         <div className="my-5 p-4 rounded-2xl bg-[#1e1e22] border border-white/5 space-y-2.5 text-xs">
           <div className="flex justify-between">
-            <span className="text-zinc-400">Estado</span>
-            <span
-              className={`font-semibold ${
-                isCompleted ? 'text-[#10b981]' : 'text-[#ff9500]'
-              }`}
-            >
-              {isCompleted ? 'Completado con éxito' : 'En proceso de validación'}
+            <span className="text-zinc-400">Cadena/Moneda</span>
+            <span className="text-white font-medium">{chainAssetLabel}</span>
+          </div>
+
+          <div className="flex justify-between gap-3">
+            <span className="text-zinc-400">Emisor</span>
+            <span className="text-white font-medium text-right break-all">
+              {emisorIdentity ?? '—'}
             </span>
           </div>
 
-          <div className="flex justify-between">
-            <span className="text-zinc-400">Método / Red</span>
-            <span className="text-white font-medium">{transaction.method || 'Re Wallet'}</span>
+          <div className="flex justify-between gap-3">
+            <span className="text-zinc-400">Receptor</span>
+            <span className="text-white font-medium text-right break-all">
+              {receptorIdentity ?? '—'}
+            </span>
           </div>
-
-          {transaction.counterparty && (
-            <div className="flex justify-between">
-              <span className="text-zinc-400">Contraparte</span>
-              <span className="text-[#ff5a1f] font-mono">{transaction.counterparty}</span>
-            </div>
-          )}
 
           {explorerUrl && (
             <div className="flex items-center justify-between gap-3">
@@ -153,14 +172,16 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
             </div>
           )}
 
-          {transaction.walletAddress && (
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-zinc-400">Wallet Solana asociada</span>
-              <span className="font-mono text-zinc-300 text-[11px] break-all text-right">
-                {transaction.walletAddress}
-              </span>
-            </div>
-          )}
+          <div className="flex justify-between">
+            <span className="text-zinc-400">Estado</span>
+            <span
+              className={`font-semibold ${
+                isCompleted ? 'text-[#10b981]' : 'text-[#ff9500]'
+              }`}
+            >
+              {isCompleted ? 'Completado con éxito' : 'En proceso de validación'}
+            </span>
+          </div>
 
           {transaction.note && (
             <div className="flex justify-between pt-1 border-t border-white/5">
@@ -198,18 +219,6 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
               <span>{copied ? '¡ID Copiado!' : 'Compartir'}</span>
             </button>
           </div>
-
-          {onRepeatTransaction && transaction.type === 'sent' && (
-            <button
-              onClick={() => {
-                onClose();
-                onRepeatTransaction(transaction);
-              }}
-              className="w-full py-3 rounded-xl bg-[#ff5a1f] hover:bg-[#ff6c35] text-white text-xs font-semibold transition-all cursor-pointer"
-            >
-              Repetir transferencia a {transaction.counterparty}
-            </button>
-          )}
         </div>
       </div>
     </div>

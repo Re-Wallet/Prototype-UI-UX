@@ -13,8 +13,19 @@ interface KeypadProps {
   title?: string;
   subtitle?: string;
   showPresets?: boolean;
+  /**
+   * 'buttons': the classic +10/+30 quick amounts. 'slider': a 0 → MAX track
+   * the user drags (used by Retirar; Transferir keeps the buttons).
+   */
+  presetStyle?: 'buttons' | 'slider';
   showBalance?: boolean;
   allowZero?: boolean;
+}
+
+/** Slider values stay 2-decimal USDC without trailing zeros ("5", "5.5", "5.25"). */
+function formatSliderAmount(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  return rounded === 0 ? '0' : String(rounded);
 }
 
 export const Keypad: React.FC<KeypadProps> = ({
@@ -28,6 +39,7 @@ export const Keypad: React.FC<KeypadProps> = ({
   title,
   subtitle,
   showPresets = true,
+  presetStyle = 'buttons',
   showBalance = true,
   allowZero = false,
 }) => {
@@ -125,8 +137,8 @@ export const Keypad: React.FC<KeypadProps> = ({
           <span className="text-xs text-zinc-500 font-medium uppercase tracking-wider">USDC</span>
         </div>
 
-        {/* Quick Amount Presets */}
-        {showPresets && (
+        {/* Amount picker: preset buttons, or a 0 → MAX slider for Retirar */}
+        {showPresets && presetStyle === 'buttons' && (
           <div className="flex items-center justify-center gap-2 mb-2">
             {[10, 30, 50, 100].map((amt) => (
               <button
@@ -143,6 +155,34 @@ export const Keypad: React.FC<KeypadProps> = ({
             >
               Max
             </button>
+          </div>
+        )}
+
+        {showPresets && presetStyle === 'slider' && (
+          <div className="mb-2 px-0.5">
+            <div className="flex items-center gap-2.5">
+              <span className="text-[11px] font-semibold text-zinc-500 tabular-nums shrink-0">0$</span>
+              <input
+                type="range"
+                aria-label="Elegir monto deslizando"
+                min={0}
+                max={Math.max(balance, 0)}
+                step={0.01}
+                value={Math.min(numValue, Math.max(balance, 0))}
+                onChange={(event) => onChange(formatSliderAmount(Number(event.target.value)))}
+                className="flex-1 cursor-pointer accent-[#ff5a1f]"
+              />
+              <button
+                type="button"
+                onClick={() => onChange(formatSliderAmount(balance))}
+                className="text-[11px] font-semibold text-[#ff5a1f] hover:text-[#ff713e] shrink-0 cursor-pointer"
+              >
+                MAX
+              </button>
+            </div>
+            <div className="mt-0.5 text-center text-[10px] text-zinc-600 tabular-nums">
+              {numValue.toFixed(2)} / {balance.toFixed(2)} USDC
+            </div>
           </div>
         )}
       </div>
