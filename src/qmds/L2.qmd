@@ -1,0 +1,62 @@
+---
+title: "L2 Disambiguation"
+description: "Multidisciplinary analysis of the term 'L2'."
+author: "Ollama Swarm + Laya"
+date: "2026-10-20"
+lang: en
+categories: [Disambiguation, Swarm]
+format: html
+toc: true
+math: false
+bibliography: ReferencesBib
+csl: IeeeCsl
+cite-method: citeproc
+generator-script: "generate-note-swarm-v16.sh"
+---
+
+## Sense 1: Linguistic Sense
+
+### Def
+"L2" refers to a language that is not a person's native language (L1). It is the second language acquired by an individual.
+
+### CTP
+- **L1:** A person's native language, typically learned during childhood.
+- **Language Acquisition:** The process of learning and developing language skills.
+- **Interlanguage:** A transitional system of language that learners develop as they move from L1 to L2.
+
+### Ex
+A person who speaks English as their native language (L1) and is learning Spanish as a second language (L2) is an example of someone learning an L2. 
+
+## Sense 2: General Sense
+
+### Def
+"L2" in a general sense often refers to a specific level or category, particularly in contexts like levels of organization, education, or technical hierarchies. It can denote a particular layer or stage in a process or system.
+
+### CTP
+- **Layered Structure**: "L2" typically denotes a second layer in a multi-layered system or hierarchy.
+- **Hierarchical Context**: It is used to describe a level within a broader structure, often following a numbering system (L1, L2, L3, etc.).
+- **Technical Context**: In technical fields, "L2" might refer to a specific protocol layer or a stage in a process.
+
+### Ex
+In a network architecture, "L2" refers to the Data Link Layer, which is the second layer in the OSI model. This layer is responsible for the reliable transfer of data between nodes on the same network segment. For example, Ethernet operates at the L2 level, handling tasks such as frame encoding and decoding, flow control, and error detection.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define symbols for demonstration
+L1, L2, L3 = sp.symbols('L1 L2 L3')
+
+# Define a simple logical relationship
+relationship = sp.Implies(L1, L2)
+
+# Print the relationship
+print(relationship)
+```
+
+In this example, the logical relationship `L1 -> L2` indicates that if a system is at level L1, it must also be at level L2. This is a necessary condition but not sufficient, as a system can be at L2 without necessarily being at L1.
+
+
+::: {.callout-note}
+Because "L2" is context-dependent, verify the intended sense before applying examples or formalizations. Formal content is expressed as Python code using SymPy.
+:::
