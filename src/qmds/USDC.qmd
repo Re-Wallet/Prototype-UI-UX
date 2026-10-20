@@ -1,0 +1,109 @@
+---
+title: "USDC Disambiguation"
+description: "Multidisciplinary analysis of the term 'USDC'."
+author: "Ollama Swarm + Laya"
+date: "2026-10-20"
+lang: en
+categories: [Disambiguation, Swarm]
+format: html
+toc: true
+math: false
+bibliography: ReferencesBib
+csl: IeeeCsl
+cite-method: citeproc
+generator-script: "generate-note-swarm-v16.sh"
+---
+
+## Sense 1: Linguistic Sense
+
+### Def
+"USDC" is a ticker symbol representing the USD Coin, a stable cryptocurrency pegged to the US dollar.
+
+### CTP
+In finance and cryptocurrency contexts, ticker symbols like "USDC" are used to identify specific cryptocurrencies. They are often displayed on exchanges and trading platforms to represent the asset being traded.
+
+### Ex
+When buying or selling USDC on a cryptocurrency exchange, the price will be displayed using the ticker symbol "USDC." For example, "1 USDC = 1.00" indicates that one USDC is currently worth one US dollar.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define the variables
+A = sp.Symbol('A')  # A represents the statement 'USDC is a stable cryptocurrency'
+B = sp.Symbol('B')  # B represents the statement 'USDC is pegged to the US dollar'
+
+# Formalize the sense "USDC is a stable cryptocurrency only if USDC is pegged to the US dollar"
+sense = sp.Implies(A, B)
+
+# Example: If USDC is a stable cryptocurrency, then it must be pegged to the US dollar
+print(sense)
+```
+
+## Sense 2: Logical Sense
+
+### Def
+
+USDC (US Dollars Convertible) is a digital currency that allows for the conversion of US dollars into another currency or vice versa, ensuring the value is preserved and facilitating international transactions. It operates within a fractional reserve system, where a portion of the USDC supply is held as reserves to cover potential jumps in the value of the underlying currency.
+
+### CTP
+
+USDC functions as a means of exchange, enabling users to convert US dollars into USDC and back. Its design ensures that USDC holds a stable value relative to the US dollar, thereby providing a safe haven for investors seeking to protect their assets from market fluctuations. USDC's value is pegged to the US dollar, maintaining a close relationship with the traditional monetary system.
+
+### Ex
+
+Suppose you have 1000 US dollars and want to convert it into USDC. You can use a USDC exchange rate to determine the equivalent amount of USDC. Let's assume the current exchange rate is 1 USD = 1 USDC. Therefore, you would receive 1000 USDC for your 1000. If the exchange rate changes, say to 1 USD = 1.1 USDC, then you would receive 1100 USDC for your 1000. This conversion allows for easy and direct exchange between the US dollar and USDC, facilitating international payments and financial transactions.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define logical variables
+has_usd = sp.symbols('has_usd')  # User has US dollars
+has_usdc = sp.symbols('has_usdc')  # User has USDC
+exchange_rate = sp.symbols('exchange_rate')  # Exchange rate from USD to USDC
+
+# Logical sense: If the user has US dollars, they can convert them to USDC
+# and vice versa, preserving the value.
+conversion_possible = sp.Implies(has_usd, has_usdc)
+conversion_possible = sp.Implies(has_usdc, has_usd)
+
+# Example: If the user has 1000 USD and the exchange rate is 1 USD = 1 USDC,
+# they will receive 1000 USDC.
+# If the exchange rate changes to 1 USD = 1.1 USDC, they will receive 1100 USDC.
+# This demonstrates the flexibility of the USDC system to adapt to changing exchange rates.
+```
+
+## Sense 3: General Sense
+
+### Def
+USDC stands for "USD Coin," a stablecoin that aims to maintain a one-to-one peg with the US dollar. It is a digital asset used in various blockchain networks to provide a more stable and predictable value compared to other cryptocurrencies.
+
+### CTP
+USDC is issued by Circle Internet Financial, LLC, and is backed by US dollars held in reserve. The token is designed to be transparent and auditable, with regular audits to ensure the reserve ratio is maintained.
+
+### Ex
+Imagine a user wants to send money across a blockchain network. They can convert their US dollars into USDC tokens, which are then transferred to the recipient. Once the recipient receives the USDC, they can convert it back into US dollars, ensuring the value remains stable.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define symbols
+usd, usdc = sp.symbols('usd usdc')
+
+# USDC is pegged to US dollar at 1:1 ratio
+usdc_peg = sp.Equivalent(usdc, usd)
+
+# Example: User converts $100 to USDC
+usd_value = 100
+usdc_value = usd_value
+
+# Check the peg
+sp.simplify(usdc_peg.subs({usd: usd_value, usdc: usdc_value}))
+```
+
+
+::: {.callout-note}
+Because "USDC" is context-dependent, verify the intended sense before applying examples or formalizations. Formal content is expressed as Python code using SymPy.
+:::
