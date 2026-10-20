@@ -1,0 +1,122 @@
+---
+title: "SPA Disambiguation"
+description: "Brief abstract | summ of the document's objectives."
+author: "Ollama (qwen2.5-coder:32b-instruct)"
+date: "2026-08-22"
+lang: en
+categories: [Disambiguation]
+format: html
+toc: true
+bibliography: ReferencesBib
+csl: IeeeCsl                 
+cite-method: citeproc
+---
+
+## SPA Def1
+
+### Def
+SinglePageApp (SPA) is a webApp that interacts with the user by dynamically rewriting the current web page with new data from the web server, instead of the default method of a webBrowser loading entire new pages from a server.
+
+### CTP
+Include using JavaScript frameworks | libs to handle UI rendering, client-side routing, & state management, which allows for a more fluid & responsive user experience !w full page reloads.
+
+### Ex 
+```{html}
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SPA Example</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const App = () => <h1>Hello, SPA!</h1>;
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
+```
+
+## SPA - Single Page Architecture
+
+### Def
+A design pattern where the entire application is served in a single HTML page, and the application dynamically updates the content based on user interactions.
+
+### CTP
+Involves modularization of the application into components, client-side routing to simulate different pages, and AJAX or Fetch API to load data without reloading the page.
+
+### Ex 
+```{javascript}
+import React, { useState } from 'react';
+import ReactDOM from 'react-dom';
+
+const App = () => {
+    const [content, setContent] = useState('Home');
+
+    const handleNavigation = (newContent) => {
+        setContent(newContent);
+    };
+
+    return (
+        <div>
+            <nav>
+                <button onClick={() => handleNavigation('Home')}>Home</button>
+                <button onClick={() => handleNavigation('About')}>About</button>
+            </nav>
+            <h1>{content}</h1>
+        </div>
+    );
+};
+
+ReactDOM.render(<App />, document.getElementById('root'));
+```
+
+## SPA - Single Page Apartment
+
+### Def
+A living space in a multi-story building, typically consisting of one level or part of a level, providing complete independent living facilities for one or more persons.
+
+### CTP
+Characteristics include private entrances, separate kitchens and bathrooms, and self-contained living areas within a larger building structure.
+
+### Ex 
+```{md}
+# Layout of a Typical SPA
+- Living Room
+- Kitchen
+- Master Bedroom
+- Bathroom
+- Balcony
+```
+
+## SPA - Single Page Area
+
+### Def
+A web development concept where all the content is managed within a single page, often used in the context of web design and user interface development.
+
+### CTP
+Emphasizes user experience through minimal page reloads and dynamic content updates, enhancing interactivity and reducing load times.
+
+### Ex 
+```{html}
+<div id="app">
+    <button onclick="loadContent('home')">Home</button>
+    <button onclick="loadContent('about')">About</button>
+    <div id="content"></div>
+</div>
+<script>
+function loadContent(page) {
+    document.getElementById('content').innerHTML = 'Loading ' + page + '...';
+    setTimeout(() => {
+        document.getElementById('content').innerHTML = 'Content of ' + page;
+    }, 500);
+}
+</script>
+```
+
+::: {.callout-note}
+Note: The most common technical meaning of SPA is related to Single Page Applications, which are widely used in modern web development for creating dynamic and responsive web interfaces.
+:::
