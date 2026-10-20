@@ -1,5 +1,5 @@
 /**
- * One-off backfill of on-chain activity into SQLite.
+ * One-off backfill of on-chain activity into PostgreSQL.
  *
  *   npm run db:backfill
  *
@@ -8,11 +8,11 @@
  * rate-limits bursts.
  */
 
-import { sqlite } from '../db';
+import { pool } from '../db';
 import { syncAllWallets } from '../services/historySync';
 
 async function main(): Promise<void> {
-  const results = await syncAllWallets();
+  const { results, rateLimited } = await syncAllWallets();
 
   console.log('\nBackfill de historial on-chain\n');
 
@@ -39,6 +39,10 @@ async function main(): Promise<void> {
     `\n  Total: ${totals.inserted} nuevos, ${totals.updated} actualizados, ${totals.movements} movimientos leídos.\n`
   );
 
+  if (rateLimited) {
+    console.log('  ⚠️  El RPC público rate-limitó la corrida; reintentar más tarde.\n');
+  }
+
   if (results.some((result) => result.error)) process.exitCode = 1;
 }
 
@@ -48,5 +52,5 @@ main()
     process.exitCode = 1;
   })
   .finally(() => {
-    sqlite.close();
+    pool.end();
   });

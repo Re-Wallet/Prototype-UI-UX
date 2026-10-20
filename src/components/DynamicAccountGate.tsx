@@ -20,7 +20,7 @@ const signInCopy: Record<Language, {
 }> = {
   en: {
     title: 'Your wallet starts here',
-    subtitle: 'Sign in with your email. Dynamic will securely create your embedded Solana wallet.',
+    subtitle: 'Sign in with your email. We create your digital dollars wallet on Solana.',
     emailLabel: 'Email address',
     emailPlaceholder: 'you@example.com',
     sendCode: 'Send verification code',
@@ -31,7 +31,7 @@ const signInCopy: Record<Language, {
   },
   es: {
     title: 'Tu billetera empieza acá',
-    subtitle: 'Ingresá con tu email. Dynamic va a crear tu wallet Solana embebida de forma segura.',
+    subtitle: 'Ingresá con tu email. Nosotros creamos tu billetera de dólares digitales en Solana.',
     emailLabel: 'Correo electrónico',
     emailPlaceholder: 'tu@ejemplo.com',
     sendCode: 'Enviar código de verificación',
