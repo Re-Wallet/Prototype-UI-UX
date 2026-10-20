@@ -1,0 +1,184 @@
+---
+title: "React Disambiguation"
+description: "Multidisciplinary analysis of the term 'React'."
+author: "Ollama Swarm + Laya"
+date: "2026-10-20"
+lang: en
+categories: [Disambiguation, Swarm]
+format: html
+toc: true
+math: false
+bibliography: ReferencesBib
+csl: IeeeCsl
+cite-method: citeproc
+generator-script: "generate-note-swarm-v16.sh"
+---
+
+## Sense 1: Linguistic Sense
+
+### Def
+"React" as a verb means to respond or make a change in behavior or action as a result of something that has happened or been perceived.
+
+### CTP
+- **Response:** "React" implies a reaction to a stimulus or event.
+- **Change:** The reaction involves a modification in behavior, state, or attitude.
+- **Trigger:** The stimulus can be internal (thoughts, feelings) or external (events, stimuli).
+
+### Ex
+When I saw the spider, I reacted by jumping back in fear. 
+
+## Sense 2: Programming Sense
+
+### Def
+React is a JavaScript library for building user interfaces, specifically single-page applications. It uses a declarative, component-based approach to create dynamic and interactive web applications.
+
+### CTP
+- **Component-Based Architecture**: React encourages the development of reusable components, each with its own state and behavior, making it easier to manage complex UIs.
+- **Virtual DOM**: React creates a virtual representation of the UI, which is then compared to the actual DOM to minimize direct DOM manipulation, improving performance.
+- **JSX**: A syntax extension for JavaScript that allows embedding HTML-like code within JavaScript files, making it easier to write and understand UI components.
+- **Unidirectional Data Flow**: React follows a unidirectional data flow where data flows from a central store (usually Redux) to components, ensuring a predictable state management.
+
+### Ex
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define a simple React component
+class MyComponent extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { count: 0 };
+  }
+
+  incrementCount() {
+    this.setState({ count: this.state.count + 1 });
+  }
+
+  render() {
+    return (
+      <div>
+        <p>Count: {this.state.count}</p>
+        <button onClick={() => this.incrementCount()}>Increment</button>
+      </div>
+    );
+  }
+}
+
+# Define a function component
+function Counter({ count, onIncrement }) {
+  return (
+    <div>
+      <p>Count: {count}</p>
+      <button onClick={onIncrement}>Increment</button>
+    </div>
+  );
+}
+
+# Define a React application
+class App extends React.Component {
+  render() {
+    return (
+      <div>
+        <MyComponent />
+        <Counter count={5} onIncrement={() => console.log('Incremented')} />
+      </div>
+    );
+  }
+}
+
+# Render the application
+ReactDOM.render(<App />, document.getElementById('root'));
+```
+
+In this example, `MyComponent` is a class component with its own state and method to increment the count. `Counter` is a function component that receives props for count and an increment function. The `App` component renders both `MyComponent` and `Counter`, demonstrating the component-based architecture and unidirectional data flow principles of React.
+
+## Sense 3: Logical Sense
+
+### Def
+"React" in the context of "Logical Sense" refers to the ability to recognize and apply the principles of logic to understand and reason about the world. It involves the mental processes and skills necessary to analyze statements, arguments, and situations to determine their logical consistency, validity, and implications.
+
+### CTP
+The core principles of "React" in this sense include:
+- Understanding the structure of logical statements and arguments.
+- Recognizing logical connectives such as "and," "or," "if... then," and "not."
+- Applying rules of inference to draw valid conclusions from given premises.
+- Evaluating the logical consistency of statements and arguments.
+- Understanding the concept of logical equivalence and implication.
+- Recognizing the difference between necessary and sufficient conditions.
+
+### Ex
+To illustrate "React" in the context of "Logical Sense," consider the following scenario:
+
+Suppose you are analyzing the statement: "If it is raining, then the ground is wet." This statement can be formalized using logical notation as R -> W , where R represents "it is raining" and W represents "the ground is wet."
+
+To "React" logically in this situation, you would need to:
+1. Recognize that the statement is in the form of a conditional statement ( A -> B ).
+2. Understand that for the statement to be true, if R (it is raining) is true, then W (the ground is wet) must also be true.
+3. Apply the rule of inference known as modus ponens to conclude that if it is indeed raining, then the ground must be wet.
+4. Recognize that the statement does not provide information about the state of the ground if it is not raining, which is the necessary but not sufficient condition for the ground to be wet.
+
+By engaging in these logical steps, you are demonstrating "React" in the context of " Logical Sense."
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define logical variables
+R = sp.symbols('R')  # It is raining
+W = sp.symbols('W')  # The ground is wet
+
+# Define the conditional statement
+statement = sp.Implies(R, W)
+
+# Example: If it is raining, then the ground is wet
+# This can be formalized as R -> W
+# To "React" logically, we can evaluate the statement
+# If R is True, then W must also be True
+# If R is False, the statement does not provide information about W
+
+# Example: If it is not raining, we cannot conclude anything about the wetness of the ground
+# This is because the statement does not provide information about the ground's wetness when it is not raining
+# The statement only provides information about the ground's wetness when it is raining
+
+# Display the formalized statement
+statement
+```
+
+## Sense 4: General Sense
+
+### Def
+React is a JavaScript library for building user interfaces. It allows developers to create reusable UI components and efficiently update and render only the necessary parts of an application when the underlying data changes.
+
+### CTP
+React follows the concept of a virtual DOM, where changes to the UI are first applied to a virtual representation of the DOM. Only when necessary, these changes are applied to the actual DOM, optimizing performance.
+
+### Ex
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define a simple React component
+class Counter:
+    def __init__(self):
+        self.state = 0
+
+    def increment(self):
+        self.state += 1
+
+    def render(self):
+        return f'Count: {self.state}'
+
+# Create an instance of the Counter component
+counter = Counter()
+
+# Increment the counter and render the updated state
+counter.increment()
+print(counter.render())  # Output: Count: 1
+```
+
+In this example, the `Counter` class simulates a React component. The `increment` method updates the state, and the `render` method returns the updated UI. When the state changes, the `render` method is called to update the UI, reflecting the general sense of React's approach to updating the user interface based on state changes.
+
+
+::: {.callout-note}
+Because "React" is context-dependent, verify the intended sense before applying examples or formalizations. Formal content is expressed as Python code using SymPy.
+:::
