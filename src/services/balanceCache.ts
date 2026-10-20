@@ -21,8 +21,17 @@ const SOL_DECIMALS = 9;
 
 /** Minimum spacing between RPC calls, process-wide. */
 const RPC_PACE_MS = Number(process.env.RPC_PACE_MS ?? 400);
-/** A cache entry younger than this is served without touching the RPC. */
-const CACHE_TTL_MS = Number(process.env.BALANCE_CACHE_TTL_MS ?? 15_000);
+/**
+ * A cache entry younger than this is served without touching the RPC.
+ *
+ * Correctness does not rest on this TTL: any movement ReWallet sees — via the
+ * Dynamic webhook or the sweeper — calls {@link invalidateBalances}, so the
+ * next read is fresh regardless. The TTL only bounds how stale an *external*
+ * movement (one ReWallet never observed) can be, so it can be generous. 60s
+ * keeps that window short while letting repeated app opens inside a minute
+ * share one RPC read.
+ */
+const CACHE_TTL_MS = Number(process.env.BALANCE_CACHE_TTL_MS ?? 60_000);
 /** One retry window for a 429 before the read fails. */
 const RATE_LIMIT_RETRY_MS = 1_500;
 
@@ -40,6 +49,25 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
+
+/**
+ * Reads in flight, keyed by wallet. Two concurrent cache misses for the same
+ * wallet share one RPC read instead of queuing two behind the pacing gate.
+ */
+const inFlight = new Map<string, Promise<BalanceSnapshot>>();
+
+/**
+ * Per-wallet generation, bumped by {@link invalidateBalances}. A read that
+ * started under an older generation must not cache its (pre-movement) result,
+ * so it checks the generation before writing.
+ */
+const generation = new Map<string, number>();
+
+function bumpGeneration(key: string): number {
+  const next = (generation.get(key) ?? 0) + 1;
+  generation.set(key, next);
+  return next;
+}
 
 // ---------------------------------------------------------------------------
 // PACING GATE
@@ -156,6 +184,32 @@ export async function getBalances(wallet: string, force = false): Promise<Balanc
     return { ...hit.snapshot, source: 'cache' };
   }
 
+  // Collapse concurrent misses for the same wallet onto one RPC read. A forced
+  // read (post-signature) still shares an in-flight read: the values it wants
+  // are the ones already being fetched.
+  const pending = inFlight.get(key);
+  if (pending) return pending;
+
+  const read = readAndCache(key, hit, generation.get(key) ?? 0);
+  inFlight.set(key, read);
+  try {
+    return await read;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
+/**
+ * Read SOL + USDC through the pacing gate and cache the result.
+ *
+ * `startedAt` is the wallet generation when the read began; if {@link invalidateBalances}
+ * bumped it meanwhile, the values are pre-movement and are not cached.
+ */
+async function readAndCache(
+  key: string,
+  hit: CacheEntry | undefined,
+  startedAt: number
+): Promise<BalanceSnapshot> {
   try {
     const [sol, usdc] = await paced(async () => {
       // Sequential inside the gate: they are two separate RPC calls.
@@ -164,7 +218,10 @@ export async function getBalances(wallet: string, force = false): Promise<Balanc
       return [solValue, usdcValue] as const;
     });
     const snapshot: BalanceSnapshot = { sol, usdc, fetchedAt: Date.now(), source: 'rpc' };
-    cache.set(key, { snapshot, fetchedAt: snapshot.fetchedAt });
+    // Only cache if no invalidation happened while we were reading.
+    if ((generation.get(key) ?? 0) === startedAt) {
+      cache.set(key, { snapshot, fetchedAt: snapshot.fetchedAt });
+    }
     return snapshot;
   } catch (error) {
     if (hit) {
@@ -175,7 +232,16 @@ export async function getBalances(wallet: string, force = false): Promise<Balanc
   }
 }
 
-/** Drop a wallet's cached balance (used when a write invalidated it). */
+/**
+ * Drop a wallet's cached balance (used when a write invalidated it).
+ *
+ * Also bumps the wallet generation so an in-flight read started before the
+ * movement cannot later cache pre-movement values, and drops that read from
+ * the dedupe map so the next caller starts a fresh one.
+ */
 export function invalidateBalances(wallet: string): void {
-  cache.delete(wallet.trim());
+  const key = wallet.trim();
+  cache.delete(key);
+  bumpGeneration(key);
+  inFlight.delete(key);
 }
