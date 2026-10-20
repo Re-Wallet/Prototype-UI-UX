@@ -294,3 +294,71 @@ export async function markNotificationsRead(
     return null;
   }
 }
+
+// ============================================================================
+// PAYMENT LINKS (single-use charge links)
+// ============================================================================
+
+/** Wire shape of a `payment_links` row after JSON serialization by the API. */
+export interface PaymentLinkDto {
+  id: number;
+  slug: string;
+  referencePubkey: string;
+  amountUsdc: number | null;
+  currency: string;
+  concept: string;
+  status: 'active' | 'paid' | 'partial' | 'expired' | 'cancelled';
+  paidAmountUsdc: number;
+  paidAt: string | null;
+  paidByPubkey: string | null;
+  paidTxId: number | null;
+  expiresAt: string | null;
+  createdAt: string;
+}
+
+/**
+ * Create a single-use charge link for `walletAddress`. Returns the created
+ * link, or null when the API is offline (fail-soft: the QR falls back to a
+ * linkless URL).
+ */
+export async function createPaymentLink(
+  walletAddress: string,
+  params: { amountUsdc: number | null; concept: string }
+): Promise<PaymentLinkDto | null> {
+  try {
+    return await request<PaymentLinkDto>('/api/payment-links', {
+      method: 'POST',
+      body: JSON.stringify({ wallet: walletAddress, ...params }),
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch a payment link by its on-chain reference. Returns null when not
+ * found or the API is offline — the caller decides whether to block.
+ */
+export async function fetchPaymentLinkByReference(
+  reference: string
+): Promise<PaymentLinkDto | null> {
+  try {
+    return await request<PaymentLinkDto>(
+      `/api/payment-links/by-reference/${encodeURIComponent(reference)}`
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the caller's payment links. Returns null when the API is offline.
+ */
+export async function fetchPaymentLinks(walletAddress: string): Promise<PaymentLinkDto[] | null> {
+  try {
+    const data = await request<PaymentLinkDto[]>(`/api/payment-links?wallet=${encodeURIComponent(walletAddress)}`);
+    return Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  }
+}

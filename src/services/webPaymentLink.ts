@@ -8,6 +8,8 @@ export interface WebPaymentIntent {
   mint: Address;
   cluster: SupportedCluster;
   message: string;
+  /** On-chain reference for single-use payment links. */
+  reference?: string;
 }
 
 export function createWebPaymentUrl(intent: WebPaymentIntent, origin: string): string {
@@ -39,6 +41,7 @@ export function createWebPaymentUrl(intent: WebPaymentIntent, origin: string): s
   url.searchParams.set('cluster', intent.cluster);
   if (intent.amount !== null) url.searchParams.set('amount', intent.amount.toFixed(asset.decimals));
   if (intent.message.trim()) url.searchParams.set('message', intent.message.trim());
+  if (intent.reference?.trim()) url.searchParams.set('reference', intent.reference.trim());
   return url.toString();
 }
 
@@ -56,6 +59,7 @@ export function parseWebPaymentUrl(locationHref: string): WebPaymentIntent | nul
   const cluster = url.searchParams.get('cluster');
   const rawAmount = url.searchParams.get('amount');
   const message = url.searchParams.get('message') ?? '';
+  const reference = url.searchParams.get('reference') ?? '';
   if (
     !recipient ||
     !mint ||
@@ -87,5 +91,6 @@ export function parseWebPaymentUrl(locationHref: string): WebPaymentIntent | nul
     mint: mint as Address,
     cluster,
     message,
+    reference: reference || undefined,
   };
 }

@@ -7,7 +7,7 @@ import { assetByMint, chain, type Address } from '../adapters';
 import { getDynamicClient } from '../dynamicClient';
 import type { Transaction } from '../types/wallet';
 import { parseWebPaymentUrl, type WebPaymentIntent } from '../services/webPaymentLink';
-import { fetchWalletIdentity, type WalletIdentity } from '../services/walletApi';
+import { fetchWalletIdentity, fetchPaymentLinkByReference, type WalletIdentity } from '../services/walletApi';
 
 function shortenAddress(address: string): string {
   if (address.length <= 12) return address;
@@ -33,6 +33,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
   const [error, setError] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
   const [recipientIdentity, setRecipientIdentity] = useState<WalletIdentity | null>(null);
+  const [linkStatus, setLinkStatus] = useState<'unknown' | 'active' | 'paid' | 'partial' | 'expired' | 'cancelled'>('unknown');
 
   const asset = useMemo(
     () => intent ? assetByMint(intent.mint, intent.cluster) : null,
@@ -87,6 +88,21 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
       cancelled = true;
     };
   }, [intent?.recipient]);
+
+  // Single-use guard: when the URL carries a reference, check the link status
+  // before allowing payment. If the link is already paid, expired or cancelled,
+  // block the form. Fails soft: without a reference the page behaves as before.
+  useEffect(() => {
+    let cancelled = false;
+    if (!intent?.reference) return;
+    void fetchPaymentLinkByReference(intent.reference).then((link) => {
+      if (cancelled || !link) return;
+      setLinkStatus(link.status);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [intent?.reference]);
 
   const handlePay = async () => {
     if (!intent || !asset || !payerWallet) {
@@ -242,7 +258,40 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
                   </span>
                 </div>
               </div>
-            ) : (
+      ) : linkStatus === 'paid' || linkStatus === 'expired' || linkStatus === 'cancelled' ? (
+        <>
+          <div className="flex w-full flex-1 flex-col items-center justify-center">
+            <div className="mb-6 text-center">
+              <img
+                alt="ReWallet"
+                className="mx-auto mb-4 h-12 w-auto select-none"
+                src="/rewallet-lockup.png"
+              />
+              <h1 className="text-2xl font-bold">
+                {linkStatus === 'paid' ? 'Cargo ya pagado' : linkStatus === 'expired' ? 'Cargo expirado' : 'Cargo cancelado'}
+              </h1>
+            </div>
+
+            <div className="w-full rounded-2xl border border-white/10 bg-[#161619] p-6 text-center">
+              <p className="text-sm text-zinc-400">
+                {linkStatus === 'paid'
+                  ? 'Este cargo ya fue pagado. Si creés que es un error, contactá al comercio.'
+                  : linkStatus === 'expired'
+                    ? 'Este cargo ya no es válido. Pedí uno nuevo al comercio.'
+                    : 'Este cargo fue cancelado por el comercio.'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={closePaymentPage}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white/5 hover:bg-white/10 text-sm font-medium text-zinc-300 transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Inicio
+          </button>
+        </>
+      ) : (
               <label className="mb-4 block w-full">
                 <span className="mb-2 block text-xs font-semibold text-zinc-300">Monto en USDC</span>
                 <input

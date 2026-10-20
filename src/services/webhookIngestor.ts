@@ -29,6 +29,7 @@ import { db } from '../db';
 import { users as usersTable, webhookEvents as webhookEventsTable } from '../db/schema';
 
 import { upsertTransactions, insertNotification, type PersistedMovement } from './wallet';
+import { settlePaymentLinkForTransfer } from './paymentLinks';
 
 // ============================================================================
 // SIGNATURE VERIFICATION
@@ -540,6 +541,25 @@ export async function projectWalletActivity(
 
     const result = await upsertTransactions(user.id, movements, subject);
     projected += result.inserted + result.updated;
+
+    // Single-use payment links: if this was an incoming USDC transfer, try to
+    // settle an active payment link for the recipient. The link's fixed
+    // amount must match the transfer amount (or be open). This runs only on
+    // successful transfers — failed ones are skipped.
+    if (!failed && hasTokenTransfer) {
+      const usdcTransfer = activity.assetTransfers.find(
+        (t) => t.toAddress === subject && assetByMint(t.tokenAddress, cluster)?.symbol === 'USDC'
+      );
+      if (usdcTransfer) {
+        await settlePaymentLinkForTransfer({
+          recipient: subject,
+          amountUsdc: usdcTransfer.amount,
+          transactionHash: activity.transactionHash,
+          payerPubkey: activity.fromAddress,
+          slot: activity.blockNumber ?? null,
+        });
+      }
+    }
 
     for (const draft of notificationDrafts) {
       await insertNotification(user.id, {

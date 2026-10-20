@@ -30,6 +30,7 @@ import {
   fetchRecentRecipients,
   registerPendingTransfer,
   registerRecipient,
+  createPaymentLink,
   type RecentRecipient,
 } from '../services/walletApi';
 
@@ -253,12 +254,27 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
       if (!merchantWallet) {
         throw new Error('No se encontró la wallet Solana creada para recibir el pago.');
       }
+      // Create the payment link server-side first. The server returns a unique
+      // on-chain reference that we embed in the URL so the payer's transaction
+      // carries it — that is what makes the link single-use. Fail-soft: if the
+      // API is offline we fall back to a linkless URL.
+      let reference: string | undefined;
+      if (solanaWallet) {
+        const link = await createPaymentLink(solanaWallet.address, {
+          amountUsdc: linkAmount > 0 ? linkAmount : null,
+          concept,
+        });
+        if (link) {
+          reference = link.referencePubkey;
+        }
+      }
       const url = createWebPaymentUrl({
         recipient: merchantWallet,
         amount: linkAmount > 0 ? linkAmount : null,
         mint: paymentAsset.mint,
         cluster: chain.network().cluster,
         message: concept,
+        reference,
       }, import.meta.env.VITE_PUBLIC_APP_URL?.trim() || window.location.origin);
       const qrDataUrl = await chain.renderQrDataUrl(url);
       setPaymentRequest({ url, qrDataUrl });

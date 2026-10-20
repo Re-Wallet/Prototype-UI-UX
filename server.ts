@@ -47,6 +47,13 @@ import { syncAllWallets } from './src/services/historySync';
 import { noteCleanSweep, noteRateLimit } from './src/services/rpcThrottle';
 import { sealLiveTransactions } from './src/services/realtimeServer';
 import {
+  createPaymentLink,
+  getPaymentLinkByReference,
+  getPaymentLinkBySlug,
+  listPaymentLinks,
+  expireStalePaymentLinks,
+} from './src/services/paymentLinks';
+import {
   markWebhookProcessed,
   parseEnvelope,
   parseWalletActivity,
@@ -363,6 +370,123 @@ app.get('/api/wallet/balances', async (req, res) => {
   }
 });
 
+// ============================================================================
+// PAYMENT LINKS (single-use charge links)
+// ============================================================================
+
+/**
+ * Create a single-use charge link.
+ *
+ * The merchant specifies a recipient (their wallet), an optional fixed amount
+ * and a concept. The server generates a unique on-chain reference and a URL
+ * slug, persists the row with `status: 'active'`, and returns the reference
+ * so the client can embed it in the payment URL.
+ */
+app.post('/api/payment-links', async (req, res) => {
+  const { wallet, amountUsdc, concept } = req.body ?? {};
+  if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
+    return res.status(400).json({ error: 'wallet must be the base58 recipient address.' });
+  }
+  const user = await getUserByPubkey(wallet);
+  if (!user) return res.status(404).json({ error: 'No wallet data is available.' });
+
+  const amount = typeof amountUsdc === 'number' && Number.isFinite(amountUsdc) && amountUsdc > 0
+    ? amountUsdc
+    : null;
+  const conceptStr = typeof concept === 'string' ? concept.trim() : '';
+  if (!conceptStr) return res.status(400).json({ error: 'concept is required.' });
+
+  try {
+    const link = await createPaymentLink(user.id, {
+      recipient: wallet.trim(),
+      amountUsdc: amount,
+      concept: conceptStr,
+    });
+    res.json({
+      id: link.id,
+      slug: link.slug,
+      referencePubkey: link.referencePubkey,
+      amountUsdc: link.amountUsdc,
+      currency: link.currency,
+      concept: link.concept,
+      status: link.status,
+      paidAmountUsdc: link.paidAmountUsdc,
+      paidAt: link.paidAt,
+      paidByPubkey: link.paidByPubkey,
+      paidTxId: link.paidTxId,
+      expiresAt: link.expiresAt,
+      createdAt: link.createdAt,
+    });
+  } catch (error) {
+    console.error('⚠️  POST /api/payment-links:', error);
+    res.status(500).json({ error: 'No se pudo crear el enlace de pago.' });
+  }
+});
+
+/**
+ * Fetch a payment link by its on-chain reference (for the /pay page status
+ * check) or by its slug (public identifier).
+ */
+app.get('/api/payment-links/by-reference/:reference', async (req, res) => {
+  const reference = typeof req.params.reference === 'string' ? req.params.reference.trim() : '';
+  if (!reference) return res.status(400).json({ error: 'reference param is required.' });
+  const link = await getPaymentLinkByReference(reference);
+  if (!link) return res.status(404).json({ error: 'Enlace no encontrado.' });
+  res.json({
+    id: link.id,
+    slug: link.slug,
+    referencePubkey: link.referencePubkey,
+    amountUsdc: link.amountUsdc,
+    currency: link.currency,
+    concept: link.concept,
+    status: link.status,
+    paidAmountUsdc: link.paidAmountUsdc,
+    paidAt: link.paidAt,
+    paidByPubkey: link.paidByPubkey,
+    paidTxId: link.paidTxId,
+    expiresAt: link.expiresAt,
+    createdAt: link.createdAt,
+  });
+});
+
+/**
+ * Fetch a payment link by slug (public identifier for status checks).
+ */
+app.get('/api/payment-links/by-slug/:slug', async (req, res) => {
+  const slug = typeof req.params.slug === 'string' ? req.params.slug.trim() : '';
+  if (!slug) return res.status(400).json({ error: 'slug param is required.' });
+  const link = await getPaymentLinkBySlug(slug);
+  if (!link) return res.status(404).json({ error: 'Enlace no encontrado.' });
+  res.json({
+    id: link.id,
+    slug: link.slug,
+    referencePubkey: link.referencePubkey,
+    amountUsdc: link.amountUsdc,
+    currency: link.currency,
+    concept: link.concept,
+    status: link.status,
+    paidAmountUsdc: link.paidAmountUsdc,
+    paidAt: link.paidAt,
+    paidByPubkey: link.paidByPubkey,
+    paidTxId: link.paidTxId,
+    expiresAt: link.expiresAt,
+    createdAt: link.createdAt,
+  });
+});
+
+/**
+ * List a user's payment links, newest first.
+ */
+app.get('/api/payment-links', async (req, res) => {
+  const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
+  if (!BASE58_RE.test(wallet)) {
+    return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
+  }
+  const user = await getUserByPubkey(wallet);
+  if (!user) return res.json([]);
+  res.json(await listPaymentLinks(user.id));
+});
+
 /**
  * Public identity for a wallet address: the registered email/handle so the
  * payment page can show "Pagar a {email}" instead of a raw pubkey. Unknown
@@ -585,6 +709,9 @@ function startHistorySweeper(): void {
                   .join(', ')
             );
           }
+          // Expire payment links whose `expiresAt` has passed.
+          const expired = await expireStalePaymentLinks();
+          if (expired > 0) console.log(`[sweeper] ${expired} payment links expirados`);
         }
       } catch (error) {
         console.error(
