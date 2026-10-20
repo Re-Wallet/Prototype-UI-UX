@@ -7,13 +7,17 @@ with an email, get a wallet, and move money with the flows people already know �
 the wallet is embedded and the account is an email one-time code.
 
 This repository is the working prototype: a React + TypeScript mobile-first UI,
-an Express API with a SQLite ledger, and a Dynamic.xyz webhook pipeline that
-turns on-chain movements into balances, history, and notifications. Everything
-runs against **Solana devnet** (test tokens, no real value).
+an Express API with a **PostgreSQL ledger on Neon**, and a Dynamic.xyz webhook
+pipeline that turns on-chain movements into balances, history, and
+notifications. Live updates ride **Neon Realtime** (logical replication over
+WebSocket): the database tells the UI *when* to look, and the chain still tells
+it *how much*. Everything runs against **Solana devnet** (test tokens, no real
+value).
 
-> **Status:** functional prototype heading to private beta. The current stack
-> (SQLite + polling sweeper) is the monolith that migrates to PostgreSQL with
-> real-time updates before beta — see [Roadmap to beta](#roadmap-to-beta).
+> **Status:** functional prototype heading to private beta. The ledger already
+> runs on PostgreSQL (Neon) with real-time propagation; a background sweeper
+> reconciles any movement the webhook missed — see
+> [Roadmap to beta](#roadmap-to-beta).
 
 ---
 
@@ -211,10 +215,16 @@ project their movements — see [Known limitations](#known-limitations).
 ┌────────────┐ ┌────────────────┐ └──────────────┬──────────────────────┘
 │ Solana     │ │ Dynamic        │                ▼
 │ devnet RPC │ │ embedded       │  ┌─────────────────────────────────────┐
-│ (paced,    │ │ wallet         │  │  SQLite via Drizzle (data/rewallet) │
+│ (paced,    │ │ wallet         │  │  PostgreSQL on Neon (Drizzle, pg)   │
 │  cached)   │ │ (email OTP)    │  │  users · transactions · contacts ·  │
 └────────────┘ └────────────────┘  │  notifications · webhook_events · … │
-                                  └─────────────────────────────────────┘
+                                   └──────────────┬──────────────────────┘
+                                                  │ logical replication
+                                                  ▼
+                                   ┌─────────────────────────────────────┐
+                                   │  Neon Realtime (WebSocket)          │
+                                   │  row changes → UI invalidations     │
+                                   └─────────────────────────────────────┘
 ```
 
 **Principles**
@@ -226,7 +236,11 @@ project their movements — see [Known limitations](#known-limitations).
   reconciled by `chain.ensureDynamicNetwork()` before every signature, and it
   **fails closed** on mismatch (genesis-hash prefix, not label).
 - There is no mock chain mode. Balances, history, and receipts come from
-  Solana; the SQLite ledger is a **projection** of it, not a substitute.
+  Solana; the PostgreSQL ledger is a **projection** of it, not a substitute.
+- **The DB says *when*; the chain says *how much*.** Realtime events invalidate
+  the server-side balance cache and trigger a client refetch — but the balance
+  number itself is always read from the chain, never derived from the ledger
+  (which cannot see movements that did not pass through ReWallet).
 
 ### How a payment settles end-to-end
 
@@ -244,14 +258,20 @@ Payer signs (Dynamic) ──► Solana devnet
                  ▼
             insertNotification  (sender + recipient copies)
                  ▼
+            balance cache invalidated (server)  ── shared funnel, webhook + sweeper
+                 ▼
+            Neon Realtime pushes row changes ──► UI invalidates + refetches balance
+                 ▼
             both apps: history row flips to completed, bell badge increments
 ```
 
-The **sweeper** (`SWEEPER_INTERVAL_MS`, default 120 s) replays confirmed
-on-chain history for every registered wallet through the same upsert path, so
-a missed webhook delays but never loses a movement. Balance reads are
-server-side with a 15 s cache and a paced RPC budget (`RPC_PACE_MS`), and
-sending flows bypass the cache with `?fresh=1`.
+The **sweeper** (default 300 s, self-rescheduling `setTimeout` with adaptive
+backoff ×2 up to 30 min on RPC rate-limits) replays confirmed on-chain history
+for every registered wallet through the same upsert path, so a missed webhook
+delays but never loses a movement. Balance reads are server-side with a 15 s
+cache and a paced RPC budget (`RPC_PACE_MS`); sending flows bypass the cache
+with `?fresh=1`. Every write that touches the ledger also invalidates the
+affected wallet's balance cache, so the next read reflects the movement.
 
 ---
 
@@ -273,7 +293,8 @@ not remove the need for SOL.
 
 ```
 server.ts                       # Express API: webhook, wallet, sweeper, SPA host
-drizzle.config.ts               # Drizzle Kit (SQLite dialect)
+drizzle.config.ts               # Drizzle Kit (PostgreSQL dialect)
+neon.ts                         # Realtime config (allowed origins)
 src/
 ├── adapters/                   # Solana access — the only chain entry point
 │   ├── index.ts                # barrel consumed by the UI (chain.*)
@@ -283,10 +304,11 @@ src/
 │   ├── dynamic-network.ts      # Dynamic vs app cluster alignment (fails closed)
 │   └── payment-verify.ts       # reference lookup, receipt verification
 ├── components/                 # screens (see Product features)
+│   └── LiveTransactionsBridge.tsx  # Neon Realtime → React query invalidation
 ├── contracts/                  # pure types + mint registry (no SDK imports)
 ├── db/
 │   ├── schema.ts               # 10 tables (ledger projection + app data)
-│   ├── index.ts                # SQLite connection + pragmas
+│   ├── index.ts                # pg pool connection
 │   └── migrations/             # generated SQL (committed)
 ├── i18n/
 │   ├── translations.ts         # ES/EN strings
@@ -294,8 +316,12 @@ src/
 ├── services/
 │   ├── walletApi.ts            # UI → API client (fail-soft)
 │   ├── wallet.ts               # data access: ledger, notifications, contacts
+│   ├── transactionMapper.ts    # DB row → UI transaction (shared REST/live)
 │   ├── webhookIngestor.ts      # HMAC verify, dedupe, movement + notification projection
 │   ├── balanceCache.ts         # paced RPC + 15 s cache for SOL/USDC
+│   ├── rpcThrottle.ts          # process-wide RPC rate-limit state
+│   ├── realtimeServer.ts       # @neon/realtime server-side subscribe
+│   ├── realtimeClient.ts       # browser Realtime client
 │   ├── historySync.ts          # sweeper: on-chain history → ledger
 │   ├── webPaymentLink.ts       # /pay URL build/parse
 │   └── solanaHistory.ts        # paginated RPC history (fallback/backfill source)
@@ -304,12 +330,16 @@ src/
 
 ## Database
 
-SQLite through Drizzle ORM, mirroring the production MariaDB model with
-SQLite-compatible types (`REAL` decimals, epoch `INTEGER` timestamps, `TEXT`
-enums/JSON). The ledger tables (`transactions`, `notifications`,
+PostgreSQL on **Neon** through Drizzle ORM (`pg` / node-postgres), with
+PostgreSQL-native types (`DECIMAL` decimals, `TIMESTAMPTZ` timestamps, `JSONB`
+payloads). The ledger tables (`transactions`, `notifications`,
 `webhook_events`) are a **projection of Solana** — authoritative data is
 on-chain; the DB makes history, notifications, and balances fast and
 idempotent.
+
+The connection uses a small pool (`max: 5`, 30 s idle timeout, 10 s connect
+timeout). Read replicas, branching, and logical replication (Realtime) are
+provided by Neon.
 
 | Table | Purpose |
 |-------|---------|
@@ -332,22 +362,24 @@ idempotent.
 | `npm run db:backfill` | Replay on-chain history into the ledger |
 | `npm run db:studio` | Drizzle Studio |
 
-### Migration path to PostgreSQL
+### Real-time propagation
 
-The schema is intentionally portable; the beta migration swaps the driver,
-not the model:
+Writes to the ledger are streamed to clients with **Neon Realtime** (logical
+replication over WebSocket). The browser subscribes to the rows it renders
+(`LiveTransactionsBridge`); when a row changes, the React query is invalidated
+and refetched, and the balance cache is invalidated server-side so the next
+balance read hits the chain.
 
-| SQLite (prototype) | PostgreSQL (beta) |
-|--------------------|-------------------|
-| `REAL` | `DECIMAL(18,6)` |
-| `INTEGER` epoch timestamp | `TIMESTAMPTZ` |
-| `TEXT` enum | native `ENUM(...)` |
-| `better-sqlite3` | `pg` (+ connection pool) |
-| in-process sweeper interval | `LISTEN/NOTIFY` + scheduled jobs |
+This is the "DB says *when*, chain says *how much*" split: the database is an
+**event source**, never the balance oracle. A balance derived purely from the
+ledger would drift, because it cannot see movements that never touched
+ReWallet (external transfers, airdrops, another device).
 
-Change the driver in `src/db/index.ts`, the `dialect` in `drizzle.config.ts`,
-regenerate migrations, and replace the polling sweeper with webhook-driven
-real-time updates (see [Roadmap to beta](#roadmap-to-beta)).
+> **History:** the prototype originally ran on SQLite with a polling sweeper
+> and client-side refetches. The migration to PostgreSQL (Neon) and Realtime
+> kept the schema and idempotency keys (`(user_id, reference_id)`) unchanged —
+> only the driver and the propagation channel changed. The sweeper is now a
+> reconciliation job, not the update path.
 
 ## API
 
@@ -368,6 +400,8 @@ app keeps working on-chain data alone.
 | GET/POST | `/api/wallet/contacts` | Address book read / save recipient |
 | GET | `/api/wallet/identity?address=` | Registered email/handle for a pubkey |
 | PATCH | `/api/settings/language` | Persist the user's language |
+| GET | `/api/landing/metrics` | Landing metric strip: cached Dynamic topline (users/wallets/sessions) |
+| POST | `/api/landing/survey` | Landing opinion form: stores a survey response (name, lastName, email, q1..q4) |
 
 ## Environment
 
@@ -377,9 +411,25 @@ app keeps working on-chain data alone.
 # ── Required (client) ─────────────────────────────────────────────
 VITE_DYNAMIC_ENVIRONMENT_ID=your_dynamic_environment_id
 
+# ── Required (server) — ledger ────────────────────────────────────
+# PostgreSQL connection string (Neon pooled endpoint recommended).
+DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
+# Direct (unpooled) endpoint, used by migrations/Drizzle Kit.
+DATABASE_URL_UNPOOLED=postgresql://user:pass@host/db?sslmode=require
+
 # ── Required (server) for real-time confirmations ─────────────────
 # Signing secret of the Dynamic webhook; HMAC-SHA256 over the raw body.
 DYNAMIC_WEBHOOK_SECRET=your_dynamic_webhook_secret
+# Neon Realtime: WebSocket URL (server + client) and server signing secret.
+NEON_REALTIME_URL=wss://<branch>-neonrealtimesocket.<region>.aws.neon.tech/
+NEON_REALTIME_SECRET=nrt_live_...
+VITE_NEON_REALTIME_URL=$NEON_REALTIME_URL   # Vite expands $VAR; secret stays server-only
+NEON_REALTIME_DB=neondb                     # database name signed into the JWT
+
+# ── Optional (server): landing metrics ────────────────────────────
+# Dashboard API token with scope environment.analytics.read, used to fill
+# the landing metric strip. Without it the strip animates zeros.
+DYNAMIC_API_TOKEN=
 
 # ── Optional (client) ─────────────────────────────────────────────
 # Public origin for shareable /pay links; empty = window.location.origin.
@@ -391,13 +441,14 @@ VITE_SOLANA_RPC_WS=
 # ── Optional (server) ─────────────────────────────────────────────
 API_PORT=3001
 API_HOST=127.0.0.1
-DATABASE_URL=./data/rewallet.db
 SOLANA_RPC_URL=https://api.devnet.solana.com   # balance cache source
 USDC_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
 RPC_PACE_MS=400                     # spacing between RPC reads
 BALANCE_CACHE_TTL_MS=15000          # balance cache lifetime
-SWEEPER_INTERVAL_MS=120000          # history backfill cadence
+SWEEPER_INTERVAL_MS=300000          # history reconciliation cadence (default 300s)
 SWEEPER_DISABLED=1                  # set to disable the sweeper
+DYNAMIC_METRICS_TTL_MS=300000       # landing metrics snapshot TTL
+DYNAMIC_ENVIRONMENT_ID=             # default: VITE_DYNAMIC_ENVIRONMENT_ID
 ```
 
 > **`.env.example` is out of date** (it still carries template variables).
@@ -426,11 +477,11 @@ Deliberate prototype constraints — tracked, not accidental:
 - **User provisioning is manual.** The webhook and ledger only project
   movements for pubkeys present in `users` (seeded for the prototype). Beta
   registers the user row at sign-up.
-- **SQLite + polling.** One process, one file. The sweeper (2 min) plus the
-  15 s balance cache are the prototype's stand-ins for a real database with
-  real-time propagation.
+- **Sweeper is a reconciliation job.** The ledger updates itself through the
+  webhook and Neon Realtime; the sweeper (300 s, adaptive backoff) exists to
+  repair a missed delivery, not to drive the UI.
 - **Devnet only.** USDC mint `4zMMC9…ncDU`; public RPC endpoints are
-  rate-limited and have no SLA.
+  rate-limited and have no SLA (the sweeper backs off on 429).
 - **i18n is partial.** Onboarding, home chrome, and settings are ES/EN;
   several flows hardcode Spanish.
 - **`npm test` fails on Node 22.21** before loading any test file
@@ -442,13 +493,10 @@ Deliberate prototype constraints — tracked, not accidental:
 The prototype is a **monolith on purpose** — one process that proves the
 product loop before infrastructure work. The path to the first beta users:
 
-1. **PostgreSQL ledger** — swap SQLite for Postgres (schema already portable,
-   see [Migration path](#migration-path-to-postgresql)); the webhook
-   projection and idempotency keys carry over unchanged.
-2. **Real-time propagation** — replace the polling sweeper and client
-   refetches with `LISTEN/NOTIFY` → SSE to the UI: balances, history rows, and
-   notification badges update as the webhook lands, with the sweeper demoted
-   to an audit/repair job.
+1. ~~**PostgreSQL ledger**~~ — **done:** the ledger runs on Neon Postgres;
+   the webhook projection and idempotency keys carried over unchanged.
+2. ~~**Real-time propagation**~~ — **done:** Neon Realtime streams row changes
+   to the UI; the sweeper was demoted to a reconciliation job.
 3. **User registration at sign-up** — insert the `users` row on first Dynamic
    login so every account is projectable by the webhook from day one.
 4. **Single-use payment links** — persist `payment_links` with an on-chain
