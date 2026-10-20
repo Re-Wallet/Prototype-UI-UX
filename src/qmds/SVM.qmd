@@ -1,0 +1,118 @@
+---
+title: "SVM Disambiguation"
+description: "Multidisciplinary analysis of the term 'SVM'."
+author: "Ollama Swarm + Laya"
+date: "2026-10-20"
+lang: en
+categories: [Disambiguation, Swarm]
+format: html
+toc: true
+math: false
+bibliography: ReferencesBib
+csl: IeeeCsl
+cite-method: citeproc
+generator-script: "generate-note-swarm-v16.sh"
+---
+
+## Sense 1: Linguistic Sense
+
+### Def
+SVM stands for "Support Vector Machine." In linguistics, it refers to a machine learning algorithm used for natural language processing tasks, such as text classification, sentiment analysis, and named entity recognition.
+
+### CTP
+SVMs work by finding the optimal hyperplane that separates data points belonging to different classes. This hyperplane maximizes the margin, which is the distance between the hyperplane and the closest data points from each class (called support vectors).
+
+### Ex
+An SVM could be used to classify movie reviews as positive or negative. The algorithm would learn from a dataset of labeled reviews, identifying patterns in the text that distinguish positive from negative sentiment. Then, it could classify new, unseen reviews based on these learned patterns. 
+
+## Sense 2: Logical Sense
+
+### Def
+Support vector machines (SVMs) are a type of supervised learning model used for classification and regression analysis. In the context of logical sense, SVMs can be seen as a method that uses a set of points (支持向量) to define a decision boundary that maximally separates different classes while minimizing the risk of misclassification.
+
+### CTP
+The core principles of SVMs include:
+1. **Maximal Margin**: SVMs aim to find a decision boundary (hyperplane) that maximizes the margin between different classes. The margin is the distance between the hyperplane and the closest data points from each class, known as support vectors.
+2. **Support Vectors**: These are the data points that lie closest to the decision boundary and have a direct influence on the position and orientation of the hyperplane. Support vectors are critical in defining the decision boundary and are the only points that need to be considered during the training process.
+3. **Con straints**: SVMs use constraints to ensure that the decision boundary correctly classifies the training data. These constraints are derived from the Lagrange multipliers method, which converts the constrained optimization problem into an unconstrained one.
+4. **Non-linear Decision Boundaries**: SVMs can handle non-linear decision boundaries by transforming the original feature space into a higher-dimensional space using a kernel function. This transformation allows SVMs to find a linear decision boundary in the higher-dimensional space, which corresponds to a non-linear decision boundary in the original feature space.
+
+### Ex
+Consider a binary classification problem where we have two classes, represented by circles and squares, in a two-dimensional feature space. The goal is to find a decision boundary that separates the two classes with the maximum margin. In the case of linearly separable data, the SVM algorithm will find a hyperplane that maximizes the margin between the two classes. The support vectors, which are the data points closest to the decision boundary, are critical in defining the hyperplane. In the example below, the circles and squares represent the two classes, and the solid line represents the decision boundary.
+
+In the plot, the solid line represents the decision boundary, and the circles represent the support vectors. The dashed lines represent the margins, and the shaded region represents the decision region for one of the classes. The support vectors are the data points closest to the decision boundary and are critical in defining the decision boundary.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define logical variables
+A = sp.symbols('A')  # A represents the presence of a support vector
+B = sp.symbols('B')  # B represents the presence of a decision boundary
+
+# Logical sense: A only if B
+# This means that a support vector exists only if a decision boundary exists
+logic_sense = sp.Implies(A, B)
+
+# Concrete example
+# If we have a decision boundary (B is True), then we must have support vectors (A is True)
+example = sp.simplify(logic_sense.subs({A: True, B: True}))
+
+print('Logical sense of SVMs:', logic_sense)
+print('Example:', example)
+```
+
+## Sense 3: General Sense
+
+### Def
+SVM stands for Support Vector Machine, a supervised learning model used in machine learning for classification and regression analysis.
+
+### CTP
+Support Vector Machines (SVMs) are based on the idea of finding a hyperplane that best separates data points of different classes. The key concepts include:
+
+- **Support Vectors**: These are the data points that lie closest to the hyperplane and influence its position.
+- **Margin**: The distance between the hyperplane and the nearest data points from each class.
+- **Kernel Trick**: A method to handle non-linearly separable data by transforming the data into a higher-dimensional space.
+
+### Ex
+Consider a binary classification problem where we have two classes of data points. We can use an SVM to find a hyperplane that separates these two classes.
+
+In this example, the SVM would find the hyperplane y = -x + 2.5 that best separates the two classes. The points closest to this hyperplane (support vectors) are the data points (1, 1) and (3, 3).
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define variables
+x, y = sp.symbols('x y')
+
+# Define the hyperplane equation
+hyperplane = sp.Eq(y, -x + 2.5)
+
+# Define the support vectors
+support_vector1 = sp.Point(1, 1)
+support_vector2 = sp.Point(3, 3)
+
+# Define the margin
+margin = sp.Abs(hyperplane.lhs - hyperplane.rhs)
+
+# Define the implication that the hyperplane separates the classes
+separation = sp.Implies(sp.And(support_vector1, support_vector2), hyperplane)
+
+# Display the results
+print(f'Hyperplane: {hyperplane}')
+print(f'Support Vectors: {support_vector1}, {support_vector2}')
+print(f'Margin: {margin}')
+print(f'Separation: {separation}')
+
+# Concrete example
+# Suppose we have a data point (2, 2). We can check if it lies on the hyperplane.
+data_point = sp.Point(2, 2)
+separation_at_data_point = separation.subs({x: data_point.x, y: data_point.y})
+print(f'Separation at data point (2, 2): {separation_at_data_point}')
+```
+
+
+::: {.callout-note}
+Because "SVM" is context-dependent, verify the intended sense before applying examples or formalizations. Formal content is expressed as Python code using SymPy.
+:::
