@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useGetWalletAccounts, useLogout, useUser } from '@dynamic-labs-sdk/react-hooks';
 import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 import { X } from 'lucide-react';
@@ -35,12 +35,39 @@ import {
   type WalletNotification,
 } from './services/walletApi';
 import { WebPaymentPage } from './components/WebPaymentPage';
+import { RealtimeProvider } from '@neon/realtime-react';
+import { realtimeClient } from './services/realtimeClient';
+import { LiveTransactionsBridge } from './components/LiveTransactionsBridge';
+
+/**
+ * Merge transaction lists by chain identity (signature + asset), newest
+ * first. One shared key for every source — REST, RPC, live Realtime rows —
+ * so a fresher copy always replaces its stale twin instead of duplicating.
+ */
+function mergeTransactionLists(current: Transaction[], incoming: Transaction[]): Transaction[] {
+  const merged = new Map<string, Transaction>();
+  for (const tx of current) {
+    merged.set(`${tx.txHash ?? tx.id}:${tx.assetSymbol ?? 'USDC'}`, tx);
+  }
+  for (const tx of incoming) {
+    merged.set(`${tx.txHash ?? tx.id}:${tx.assetSymbol ?? 'USDC'}`, tx);
+  }
+  return [...merged.values()].sort((a, b) => b.date.getTime() - a.date.getTime());
+}
 
 export default function App() {
-  return (
+  const tree = (
     <DynamicAccountGate>
       <WalletApp />
     </DynamicAccountGate>
+  );
+
+  // Realtime is optional (VITE_NEON_REALTIME_URL): without a client the app
+  // keeps its REST + RPC transaction paths untouched.
+  return realtimeClient ? (
+    <RealtimeProvider client={realtimeClient}>{tree}</RealtimeProvider>
+  ) : (
+    tree
   );
 }
 
@@ -129,7 +156,7 @@ function WalletApp() {
     setIsBalanceLoading(false);
   }, [solanaWallet?.address]);
 
-  const refreshTransactions = useCallback(async () => {
+  const refreshTransactions = useCallback(async (silent = false) => {
     if (!solanaWallet) {
       setTransactions([]);
       setTransactionsError('No se encontró la wallet Solana de esta cuenta.');
@@ -137,7 +164,10 @@ function WalletApp() {
       return;
     }
 
-    setIsTransactionsLoading(true);
+    // A background poll must not flash the loading state over data already on
+    // screen, and must not fall back to the rate-limited RPC path: it reads the
+    // local DB only and leaves the current list untouched on failure.
+    if (!silent) setIsTransactionsLoading(true);
     try {
       // Primary source: the local DB (webhook + sweeper projections). The
       // direct RPC path is rate-limited by the RPC provider (429s), so it is
@@ -145,26 +175,55 @@ function WalletApp() {
       const dbTransactions = await fetchWalletTransactions(
         solanaWallet.address as string
       );
+      if (silent) {
+        if (dbTransactions) {
+          setTransactions((current) => mergeTransactionLists(current, dbTransactions));
+        }
+        return;
+      }
       const sourceTransactions =
         dbTransactions ?? (await getWalletTransactions(solanaWallet.address as Address));
 
-      setTransactions((current) => {
-        const merged = new Map<string, Transaction>();
-        for (const tx of current) {
-          merged.set(`${tx.txHash ?? tx.id}:${tx.assetSymbol ?? 'USDC'}`, tx);
-        }
-        for (const tx of sourceTransactions) {
-          merged.set(`${tx.txHash ?? tx.id}:${tx.assetSymbol ?? 'USDC'}`, tx);
-        }
-        return [...merged.values()].sort((a, b) => b.date.getTime() - a.date.getTime());
-      });
+      setTransactions((current) => mergeTransactionLists(current, sourceTransactions));
       setTransactionsError(null);
     } catch (error) {
-      setTransactionsError(error instanceof Error ? error.message : String(error));
+      if (!silent) setTransactionsError(error instanceof Error ? error.message : String(error));
     } finally {
-      setIsTransactionsLoading(false);
+      if (!silent) setIsTransactionsLoading(false);
     }
   }, [solanaWallet?.address]);
+
+  // Neon Realtime pushes full authoritative row snapshots after each atomic
+  // batch; the shared merge key lets them replace their REST/RPC twins.
+  //
+  // The DB tells us *when* something changed, the chain tells us *how much*:
+  // on every genuinely new batch we invalidate the cached balance and re-read
+  // it from the source. The first batch is the mount snapshot, already
+  // covered by the initial load, so it must not trigger a redundant refetch.
+  const liveFingerprintRef = useRef<string | null>(null);
+  const handleLiveTransactions = useCallback(
+    (rows: Transaction[]) => {
+      setTransactions((current) => mergeTransactionLists(current, rows));
+
+      // Identity + status of every row: a pending→completed flip changes the
+      // balance without changing the row count, so length alone is not enough.
+      const fingerprint = rows
+        .map((row) => `${row.id ?? row.txHash ?? ''}:${row.status}`)
+        .join('|');
+
+      if (liveFingerprintRef.current === null) {
+        liveFingerprintRef.current = fingerprint;
+        return;
+      }
+      if (liveFingerprintRef.current === fingerprint) return;
+
+      liveFingerprintRef.current = fingerprint;
+      // `fresh` bypasses the balance cache — the whole point, since a movement
+      // just landed and the cached value is provably stale.
+      void refreshBalance({ fresh: true });
+    },
+    [refreshBalance]
+  );
 
   const refreshNotifications = useCallback(async () => {
     if (!solanaWallet) {
@@ -193,11 +252,29 @@ function WalletApp() {
   }, [refreshBalance, refreshTransactions, refreshNotifications]);
 
   // The webhook lands seconds after the send, so poll the local feed while the
-  // app is open: the bell badge then appears without a manual reload.
+  // app is open: both the transcript and the bell then update without a manual
+  // reload. Polling pauses while the tab is hidden — an invisible tab must not
+  // keep waking the Neon compute — and refetches immediately on return so the
+  // user never sees a stale feed after switching back.
   useEffect(() => {
-    const interval = setInterval(() => void refreshNotifications(), 20_000);
-    return () => clearInterval(interval);
-  }, [refreshNotifications]);
+    const tick = () => {
+      void refreshTransactions(true);
+      void refreshNotifications();
+    };
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') tick();
+    }, 20_000);
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [refreshTransactions, refreshNotifications]);
   // Navigation and active flows (Navbar has only: home, transfer, activity)
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [activeFlow, setActiveFlow] = useState<
@@ -457,6 +534,14 @@ function WalletApp() {
         <PhoneFrame isFramed={true}>
           {/* Notification Toast */}
           <NotificationToast toast={toast} onDismiss={() => setToast(null)} />
+
+          {/* Invisible: live DB → UI propagation over Neon Realtime */}
+          {solanaWallet && realtimeClient && (
+            <LiveTransactionsBridge
+              walletAddress={solanaWallet.address as string}
+              onRows={handleLiveTransactions}
+            />
+          )}
 
           {/* Screen Content */}
           <div className="relative flex-1 flex flex-col h-full overflow-hidden">
