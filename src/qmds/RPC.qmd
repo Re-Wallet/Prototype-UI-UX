@@ -1,0 +1,250 @@
+---
+title: "RPC Disambiguation"
+description: "A comprehensive disambiguation document analyzing the technical definitions, core principles, & practical applications of RPC across distributed systems, photogrammetry, particle physics, logistics, statistics, & medicine."
+author: "Gemini 2.0 Flash"
+date: "2026-07-26"
+lang: en
+categories: [Disambiguation]
+format: html
+toc: true
+bibliography: ReferencesBib
+csl: IeeeCsl                 
+cite-method: citeproc
+---
+
+## Remote Procedure Call (Distributed Systems) -Def1
+
+- ### Def
+A network protocol & inter-process communication (IPC) paradigm that allows a program to execute a subroutine or procedure in a separate address space (typically on a remote server across a network) without the programmer explicitly writing code 4network transport mechanisms.
+- ### CTP
+Operates via client & server stubs that abstract the underlying communication layer. The client stub marshals (serializes) parameters into a standardized binary or text wire format (such as ProtocolBuffers, JSON, or XML), sends the message across transport protocols (such as TCP/IP or HTTP/2), & unmarshals the response. RPC frameworks provide location transparency, synchronous or asynchronous execution semantics, strong interface definitions via InterfaceDefinitionLangs (IDLs), & automatic client stub generation.
+- ### Ex
+Below is an example of an RPC service definition using Protocol Buffers IDL and the corresponding Python client execution via gRPC:
+
+```{protobuf}
+syntax = "proto3";
+
+package mathservice;
+
+service Calculator {
+  rpc Add (AddRequest) returns (AddResponse);
+}
+
+message AddRequest {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message AddResponse {
+  int32 result = 1;
+}
+```
+
+```{python}
+#| eval: false
+import grpc
+import calculator_pb2
+import calculator_pb2_grpc
+
+def run_rpc_client():
+    with grpc.insecure_channel('localhost:50051') as channel:
+        stub = calculator_pb2_grpc.CalculatorStub(channel)
+        request = calculator_pb2.AddRequest(x=42, y=58)
+        response = stub.Add(request)
+    print('RPC Server Response:', response.result)
+
+if __name__ == '__main__':
+    run_rpc_client()
+```
+
+::: {.callout-note}
+Modern RPC implementations such as gRPC leverage HTTP/2 features (such as stream multiplexing, header compression, and bi-directional streaming) combined with compact binary serialization to deliver higher performance than conventional REST over HTTP/1.1.
+:::
+
+## Rational Polynomial Coefficients (Photogrammetry & Remote Sensing)
+
+- ### Def
+A standardized set of empirical mathematical parameters used in remote sensing and photogrammetry to map three-dimensional ground coordinates (latitude, longitude, height) to two-dimensional image coordinates (pixel column, row) without exposing complex physical sensor geometry.
+- ### CTP
+Approximates the sensor optical perspective model using ratios of 3rd-order polynomial equations in three spatial variables ($X, Y, Z$). The transformation uses 80 numerical coefficients (20 per polynomial across four polynomials) derived from satellite orbital ephemeris and ground control points (GCPs). This sensor-independent model allows geospatial software to perform fast geometric correction, orthorectification, and 3D stereo reconstruction.
+- ### Ex
+The mathematical mapping converts normalized ground coordinates $(X_n, Y_n, Z_n)$ to normalized image row and column coordinates $(r_n, c_n)$:
+
+$r_n = \frac{P_1(X_n, Y_n, Z_n)}{P_2(X_n, Y_n, Z_n)}$
+
+$c_n = \frac{P_3(X_n, Y_n, Z_n)}{P_4(X_n, Y_n, Z_n)}$
+
+where each $P_i$ is a cubic polynomial expansion:
+
+$P_i(X_n, Y_n, Z_n) = a_1 + a_2 X_n + a_3 Y_n + a_4 Z_n + a_5 X_n Y_n + a_6 X_n Z_n + a_7 Y_n Z_n + a_8 X_n^2 + \dots + a_{20} Z_n^3$
+
+A representative metadata structure format containing RPC params is represented in JSON:
+
+```{json}
+{
+  "rpc_metadata": {
+    "line_offset": 2400.0,
+    "samp_offset": 1800.0,
+    "lat_offset": 34.0522,
+    "long_offset": -118.2437,
+    "height_offset": 120.0,
+    "line_num_coeff": [0.002, 0.145, -0.032, 0.001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "line_den_coeff": [1.0, 0.0001, 0.0002, -0.0001, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  }
+}
+```
+
+::: {.callout-note}
+RPC params are routinely bundled alongside high-resolution commercial satellite imagery (such as Maxar WorldView or PlanetScope) in companion metadata files (`.RPB` or `_RPC.TXT`).
+:::
+
+## Resistive Plate Chamber (Experimental Particle Physics)
+
+- ### Def
+A gaseous parallel-plate particle detector that provides fast response times, high sub-nanosecond temporal resolution, and spatial tracking for ionizing radiation over large surface areas.
+- ### CTP
+Constructed from two parallel high-resistivity electrode plates (typically glass or bakelite) separated by a narrow gas gap (e.g., $2 \text{ mm}$) filled with a gas mixture (typically tetrafluoroethane, isobutane, and sulfur hexafluoride). A uniform high electric field ($E \approx 4\text{--}5 \text{ kV/mm}$) applied across the gap accelerates primary ionization electrons created by passing charged particles, producing a Townsend avalanche. The high resistivity of the plates prevents spark breakdown by dropping the local electric field immediately following a discharge.
+- ### Ex
+The electric charge $q(t)$ induced on external pickup strips by a Townsend avalanche is modeled by:
+
+$q(t) = \frac{q_0}{\alpha d} \left( e^{\alpha v_e t} - 1 \right)$
+
+where $q_0$ is the initial ionization charge, $\alpha$ is the 1º Townsend coefficient, $v_e$ is the electron drift velocity, and $d$ is the gap width.
+
+A operational parameter configuration for an RPC sub-detector system:
+
+```{yaml}
+detector_configuration:
+  system_name: Muon_RPC_Trigger
+  gas_composition:
+    C2H2F4: 0.952
+    i-C4H10: 0.045
+    SF6: 0.003
+  operating_voltage_kv: 9.6
+  time_resolution_ns: 1.0
+  spatial_resolution_cm: 0.8
+```
+
+::: {.callout-note}
+Resistive Plate Chambers are essential components of the muon trigger and timing systems in major high-energy particle colliders, including the ATLAS and CMS experiments at CERN's Large Hadron Collider (LHC).
+:::
+
+## Reusable Packaging Container (Logistics & Supply Chain)
+
+- ### Def
+A standardized, collapsible plastic crate or transport box designed for repeated return cycles in closed-loop supply chains for fresh produce, retail goods, & industrial components.
+- ### CTP
+Fabricated from durable, recyclable food-grade polymers (such as High-Density Polyethylene or Polypropylene). Designed with ergonomic locking mechanisms, ventilated sidewalls, & standardized footprint dimensions (e.g., ISO $600 \text{ mm} \times 400 \text{ mm}$) 2optimize palleted transport volume, protect perishable payload, & reduce single-use cardboard packaging waste.
+- ### Ex
+The metric 4overall packaging waste reduction ratio $W_r$ across $N$ lifecycle uses compared 2single-use corrugated containers is expressed as:
+
+$W_r = 1 - \frac{M_{\text{RPC}}}{N \cdot M_{\text{cardboard}}}$
+
+where $M_{\text{RPC}}$ is the mass of one reusable container, $M_{\text{cardboard}}$ is the mass of an equivalent single-use container, & $N$ is the nº of return trips (typically $N \ge 50$).
+
+The structural parameter specification of a standard RPC:
+
+```{json}
+{
+  "container_type": "Folding Produce RPC",
+  "material": "High-Density Polyethylene (HDPE)",
+  "external_dimensions_mm": {
+    "length": 600,
+    "width": 400,
+    "height": 220
+  },
+  "folded_height_mm": 36,
+  "tare_weight_kg": 1.85,
+  "maximum_payload_kg": 20.0,
+  "expected_trips": 100
+}
+```
+
+::: {.callout-tip}
+Implementing RPC fleets significantly decreases cold-chain damage rates and lowers carbon emissions per shipment, though it requires robust reverse logistics tracking systems (e.g., RFID or barcode scanning).
+:::
+
+## Robust Principal Components (Statistical Analysis & Machine Learning)
+
+- ### Def
+A statistical matrix decomposition technique (frequently referred to as Robust PCA or RPC) that recovers a low-rank matrix from high-dimensional observational data corrupted by gross, sparse errors or outliers.
+- ### CTP
+Conventional Principal Component Analysis (PCA) is sensitive to high-magnitude outliers due to its reliance on the $\ell_2$-norm. Robust Principal Components decomposes an observed matrix $M$ into a low-rank matrix $L$ (capturing underlying structural patterns) and a sparse matrix $S$ (capturing corrupting noise or anomalies) by solving a convex optimization problem combining the nuclear norm $\|L\|_*$ and the $\ell_1$-norm $\|S\|_1$.
+- ### Ex
+The convex optimization problem (Principal Component Pursuit) is formulated as:
+
+$\min_{L, S} \|L\|_* + \lambda \|S\|_1 \quad \text{subject to} \quad L + S = M$
+
+where $\|L\|_* = \sum_i \sigma_i(L)$ denotes the sum of singular values, $\|S\|_1 = \sum_{i,j} |S_{ij}|$ denotes the sum of absolute entry values, and $\lambda = \frac{1}{\sqrt{\max(m, n)}}$ for an $m \times n$ matrix $M$.
+
+The following Python code demonstrates an implementation using the Augmented Lagrange Multiplier (ALM) method:
+
+```{python}
+#| eval: false
+import numpy as np
+
+def robust_pca(M, max_iter=500, tol=1e-7):
+    m, n = M.shape
+    lam = 1.0 / np.sqrt(max(m, n))
+    
+    Y = M / np.max([np.linalg.norm(M, 2), np.linalg.norm(M, np.inf) / lam])
+    L = np.zeros((m, n))
+    S = np.zeros((m, n))
+    mu = 1.25 / np.linalg.norm(M, 2)
+    rho = 1.5
+    
+    for k in range(max_iter):
+        temp_s = M - L + (1.0 / mu) * Y
+        S = np.sign(temp_s) * np.maximum(np.abs(temp_s) - (lam / mu), 0)
+        
+        u, s, vh = np.linalg.svd(M - S + (1.0 / mu) * Y, full_matrices=False)
+        s_thresh = np.maximum(s - (1.0 / mu), 0)
+        L = np.dot(u * s_thresh, vh)
+        
+        residual = M - L - S
+        Y = Y + mu * residual
+        mu = mu * rho
+        
+        if np.linalg.norm(residual, 'fro') / np.linalg.norm(M, 'fro') < tol:
+            break
+            
+    return L, S
+```
+
+::: {.callout-note}
+RPC decomposition is widely used in video surveillance background subtraction (where $L$ represents static background and $S$ represents moving objects) and matrix completion tasks.
+:::
+
+## Radial Peripapillary Capillaries (Ophthalmic Imaging & Medicine)
+
+- ### Def
+A specialized microvascular network located in the primary nerve fiber layer surrounding the optic nerve head in the human retina.
+- ### CTP
+Features long, straight, parallel capillary segments with minimal cross-linking anastomoses that supply oxygen and nutrients to high-metabolic-demand retinal ganglion cell axons. Evaluated in clinical ophthalmology using Optical Coherence Tomography Angiography (OCTA) to non-invasively map vessel density and perfusion parameters.
+- ### Ex
+The quantitative Radial Peripapillary Capillary Density ($CD_{\text{RPC}}$) percentage within a defined region of interest (ROI) is calculated as:
+
+$CD_{\text{RPC}} = \frac{A_{\text{vessels}}}{A_{\text{ROI}}} \times 100\%$
+
+where $A_{\text{vessels}}$ is the total binarized vessel area within the radial peripapillary region and $A_{\text{ROI}}$ is the total area of the region of interest.
+
+A Python processing snippet for extracting capillary density from a binary OCTA segmentation mask:
+
+```{python}
+#| eval: false
+import numpy as np
+
+def calculate_capillary_density(octa_mask: np.ndarray, roi_mask: np.ndarray) -> float:
+    vessel_pixels = np.count_nonzero(octa_mask & roi_mask)
+    total_roi_pixels = np.count_nonzero(roi_mask)
+    
+    if total_roi_pixels == 0:
+        return 0.0
+        
+    density_percentage = (vessel_pixels / total_roi_pixels) * 100.0
+    return float(density_percentage)
+```
+
+::: {.callout-note}
+Focal loss of Radial Peripapillary Capillary perfusion often precedes measurable structural thinning of the Retinal Nerve Fiber Layer (RNFL), making quantitative RPC analysis an important early diagnostic indicator for glaucoma.
+:::
