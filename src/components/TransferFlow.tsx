@@ -181,20 +181,25 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
       // Record the transfer as `pending` in the local DB so the sender's
       // history survives a reload before the webhook or sweep lands. The
       // webhook later upserts the same row as `completed`. Fails soft.
+      const assetSymbol = paymentAsset.symbol === 'SOL' ? 'SOL' : 'USDC';
       void registerPendingTransfer({
         wallet: solanaWallet.address,
         signature: transactionHash,
         counterpartyPubkey: recipientSolanaAddress,
         amountUsdc: Number(sendAmount.toFixed(paymentAsset.decimals)),
-        assetSymbol: paymentAsset.symbol === 'SOL' ? 'SOL' : 'USDC',
+        assetSymbol,
         note: note || undefined,
       });
       void loadRecentRecipients();
+      // The optimistic twin mirrors the server projection exactly — same
+      // `referenceId` (`<signature>-<symbol>`, the DB's idempotency key) and same
+      // `type` (a SOL send is a `withdrawal`, not a `sent`), so when the webhook
+      // or sweep upserts the real row there is no visible flash.
       onTransferComplete({
         id: `tx-${Date.now()}`,
         title: recipientName,
         counterparty: recipientSolanaAddress,
-        type: 'sent',
+        type: assetSymbol === 'SOL' ? 'withdrawal' : 'sent',
         status: 'in_progress',
         amount: sendAmount,
         fiatAmount: sendAmount,
@@ -202,7 +207,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
         timestamp: 'Just now',
         date: new Date(),
         method: `Solana ${paymentAsset.symbol}`,
-        referenceId: transactionHash,
+        referenceId: `${transactionHash}-${assetSymbol}`,
         note: note || 'Transferencia firmada por tu wallet Solana',
         txHash: transactionHash,
         walletAddress: solanaWallet.address,
