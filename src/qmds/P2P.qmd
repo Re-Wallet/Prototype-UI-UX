@@ -1,0 +1,116 @@
+---
+title: "P2P Disambiguation"
+description: "Brief abstract | summ of the document's objectives."
+author: "Ollama (qwen2.5-coder:32b-instruct)"
+date: "2026-09-02"
+lang: en
+categories: [Disambiguation]
+format: html
+toc: true
+bibliography: ReferencesBib
+csl: IeeeCsl                 
+cite-method: citeproc
+---
+
+## P2P Networks (Def1)
+
+### Def
+P2P networks are decentralized networks where each participant (node) has the ability to act as both a client and a server, allowing for the direct exchange of data between nodes.
+
+### CTP 
+- Decentralization: No central authority controls the network.
+- Resource Sharing: Nodes share their resources (e.g., storage, bandwidth) with others.
+- Fault Tolerance: The network can continue to function even if some nodes fail.
+
+### Ex
+```{bash}
+# Example of a simple file-sharing command using a P2P network
+scp file.txt user@remote_host:/path/to/destination
+```
+
+## P2P Protocols
+
+### Def
+P2P protocols are a set of rules that govern how nodes in a P2P network communicate and exchange data.
+
+### CTP 
+- Peer Discovery: Mechanisms for nodes to find and connect to other nodes.
+- Data Transfer: Methods for nodes to send and receive data.
+- Security: Protocols for encrypting and authenticating data.
+
+### Ex
+```{md}
+# Example of a P2P protocol in action
+```
+```{bash}
+# Using BitTorrent protocol to download a file
+bittorrent-client download magnet:?xt=urn:btih:examplehash
+```
+
+## P2P Computing
+
+### Def
+P2P computing is a distributed computing model where the computing resources of multiple computers are combined to solve a problem.
+
+### CTP 
+- Task Distribution: Tasks are divided and distributed among nodes.
+- Resource Pooling: Nodes share their processing power, memory, and storage.
+- Synchronization: Coordination of distributed tasks to ensure consistency.
+
+### Ex
+```{bash}
+# Example of using BOINC (Berkeley Open Infrastructure for Network Computing)
+boinccmd --get_tasks
+```
+
+## P2P File Sharing
+
+### Def
+P2P file sharing is a method of sharing files where each participant in the network can upload and download files simultaneously.
+
+### CTP 
+- File Segmentation: Files are divided into smaller pieces for efficient sharing.
+- Seeders and Leechers: Seeders have complete files and share them, while leechers download pieces from seeders and other leechers.
+- Trackerless Networks: Some networks operate without central trackers.
+
+### Ex
+```{bash}
+# Example of using Transmission (a BitTorrent client) to share files
+transmission-gtk
+```
+
+## P2P Telephony
+
+### Def
+P2P telephony allows for voice and video communication over a P2P network, enabling direct peer-to-peer connections.
+
+### CTP 
+- Voice over IP (VoIP) Technologies: Using IP protocols to transmit voice data.
+- Quality of Service (QoS): Ensuring consistent voice quality.
+- Encryption: Securing voice communications.
+
+### Ex
+```{bash}
+# Example of using Linphone for P2P telephony
+linphone
+```
+
+## P2P Social Networking
+
+### Def
+P2P social networking platforms allow users to connect and share content directly with each other without a central server.
+
+### CTP 
+- Direct Communication: Users can communicate directly without intermediaries.
+- Content Distribution: Users share content directly with their connections.
+- Data Privacy: Enhanced privacy due to lack of central data storage.
+
+### Ex
+```{bash}
+# Example of using Diaspora, a P2P social networking platform
+diaspora-daemon start
+```
+
+::: {.callout-note}
+Note: Each P2P technology has unique characteristics and applications, but they all share the core principle of peer-to-peer communication and resource sharing.
+:::
