@@ -1,0 +1,278 @@
+---
+title: "API"
+subtitle: "REST, WebSocket, FIX, autentication, limits, monitoreo y best practices"
+author: ""
+date: 2026-07-03
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    code-fold: true
+    code-summary: "Show code"
+    highlight-style: github
+    theme: cosmo
+    self-contained: true
+jupyter: python3
+lang: en
+categories: [tech]
+---
+
+## Intro
+
+(AppProgInterface) is the vertebralCol of the interoperability btwn syss. In the context of platforms financieras & of criptoCurrencies, the APIs allow the access 2marketData, the execution of orders, the gestión of cuentas & the integration w bankingServices.
+
+This document reúne concepts of design, security, exs prácticos & guides operativas 4build, consumir & auditar APIs in envs of highCriticidad.
+
+---
+
+## TypesOfRelevantAPIs
+
+- RESTful (HTTP/HTTPS): model request/response, ampliamente used 4endpoints públicos & privados.
+- WebSocket: canal persistente 4streaming of market, órdenes & events in realTime.
+- FIX (Financial Information eXchange): protocol estándar 4trading institucional of low latencia.
+- gRPC: RPC binario eficiente, útil in microservices & comunicación interna.
+- GraphQL: consultas flexibles in endpoints of data (menos común in exchanges por performance determinista).
+
+## Design RESTful: keyConcepts
+
+- ReSrcs & paths: usar clearPaths `GET /api/v1/markets/BTC-USD/book`.
+- Versionado: incluir `v1`, `v2` in the path o in headers 4compatibilidad.
+- Codes HTTP adecuados: 200 OK, 201 Created, 400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, 429 Too Many Requests, 500 Internal Server Error.
+- Contracts: usar OpenAPI / Swagger 4especificación formal.
+- Security: HTTPS obligatorio, HSTS, cabeceras seguras.
+
+## WebSocket: practices & patterns
+
+- Conexión y autenticación: handshake initial y token o firm HMAC 4canales privados.
+- Re-subscription y recuperación: clientes deben reconectar y re-suscribirse ante desconexión, aplicar backoff exponencial.
+- Ping/Pong: mantener conexión viva y detectar latencia/timeout.
+- Messages comprimidos y binarios 4throughput.
+
+## FIX & trading institucional
+
+- FIX is the std 4órdenes of baja latencia in entornos institucionales.
+- Requiere sesiones w heartbeat, seqnums, resend requests & replay.
+- Integración típica: gateways FIX ↔ matching engine.
+
+## Autentication & autorization
+
+- API Keys: identificador public + secret (HMAC signing).
+- OAuth2: adecuado 4delegación & acceso usuario a recursos; menos used 4trading of baja latencia.
+- JWT: tokens firmados 4sesiones cortas.
+- mTLS (Mutual TLS): recomendación 4conexiones B2B of alta seguridad.
+- Rotación of claves: políticas & expiración.
+
+### Ex: firm HMAC (Python)
+
+```{python}
+#| eval: false
+import hashlib
+import hmac
+import time
+
+def sign_message(secret: str, message: str) -> str:
+    return hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+
+ts = str(int(time.time() * 1000))
+payload = ts + 'POST' + '/api/v1/order' + '{"symbol":"BTCUSDT","side":"BUY","qty":0.001}'
+signature = sign_message('MI_SECRET_API', payload)
+print(signature)
+```
+
+## TimeSynchronization
+
+- Usar NTP in servers y validar drift in the cliente: firmas w timestamps requieren sincronía.
+- Ofrecer endpoint `/time` 4sincronizar clientes (ex. Binance `GET /api/v3/time`).
+
+## RateLimits & throttling
+
+- DesignLimits by API key & by IP. Ex: 1200 requests/minute by key.
+- Respuestas 429 w `Retry-After` header.
+- Backoff exponencial recomended 4reintentos (ex.: base .5s, factor 2, jitter).
+
+### StrategyOfBackoff (Python)
+
+```{python}
+#| eval: false
+import time
+import random
+
+def backoff_sleep(attempt):
+    base = .5
+    wait = base * (2 ** attempt)
+    # jitter
+    wait = wait * (.5 + random.random() * .5)
+    time.sleep(wait)
+
+for i in range(5):
+    try:
+        # petition
+        pass
+    except Exception:
+        backoff_sleep(i)
+```
+
+## Pagination & limits of answer
+
+- Cursor-based vs offset-based: preferir cursor 4dinamicDatasets.
+- `limit` y `cursor` in parámetros, `next_cursor` in respuesta.
+- Evitar páginas profundas por costo in the syss.
+
+## Idempotency
+
+- Incluir `Idempotency-Key` in cabeceras 4avoid executions duplicated in POSTs critics (ex.: orders, buys).
+- Mantener cache of idempotencia w TTL suficiente.
+
+## HandleOfErrors & codes
+
+- Errors deterministas: validar schema & return 4xx w messages & errorCodes.
+- Errors temporales: 5xx, w retry & alerting.
+- Messages legibles & structured (JSON): `{"code": 101, "message": "Insufficient funds", "info": {...}}`.
+
+## Security: prevention & hardening
+
+- Encriptation in tránsito & in reposo (TLS + cifrado KMS 4secrets).
+- Limitación of privilegios: principio of menor privilegio 4services y cuentas.
+- WAF, IDS/IPS & escaneo of dependencias.
+- Vulnerability management & proceso of parches.
+
+## Auditoría & trazability
+
+- Logging structured (JSON logs), correlation by request id.
+- Retención apropiada of logs 4auditoría (cumplimiento of GDPR/retención financiera).
+- Rastreability of operations críticas & changes of configuración.
+
+## OpenAPI / Contrato & generation of SDKs
+
+- Mantener 1 specification OpenAPI $\forall$ the endpoints públicos.
+- Generar SDKs oficials (Python, JS, Go) & publicar in repositorios.
+- Versionar the contract & documentar changes breaking.
+
+### Ex minimal OpenAPI fragment
+
+```{yaml}
+openapi: 3.0.0
+info:
+  title: Exchange API
+  version: 1.0.0
+paths:
+  /api/v1/order:
+    post:
+      summary: Crear orden
+      requestBody:
+        required: true
+      responses:
+        '201':
+          description: Orden creada
+
+```
+
+## Sandbox & pruebas
+
+- Ofrecer sandbox w data mock para integración segura.
+- Test suites: contract tests, integration tests end-to-end, chaos testing para resiliencia.
+
+## Observability: metrics & alerts
+
+- Métricas: request/sec, latencia P50/P95/P99, errores por endpoint, rate limit hits, queue depth.
+- Tracing distribuido (OpenTelemetry), dashboards y alerts in Prometheus/Grafana.
+
+## Gobernanza & lifeCycle of API
+
+- Politics of deprecation (announcements, windows of migración).
+- Versionado semantic y compatibilidad.
+- Portal of developers w keys, documentación, rate limits y estado del servicio.
+
+## GPs 4consumo in clients
+
+- ReTry w backoff & manejar 429/5xx.
+- Mantener conexion WebSocket & re-suscribirse tras reconexión.
+- Respetar headers `Cache-Control` & usar ETag para data inmutables.
+
+## Cases of use & exs practices
+
+### 1) Queryr orderBook (REST)
+
+```{python}
+import requests
+
+resp = requests.get('https://api.exchange.example.com/api/v1/market/BTCUSD/depth', params={'limit': 50})
+print(resp.json())
+```
+
+### 2) StreamOfPrices (WebSocket)
+
+```{python}
+import websocket
+import json
+
+def on_message(ws, message):
+    data = json.loads(message)
+    print('Tick:', data)
+
+ws = websocket.WebSocketApp('wss://ws.exchange.example.com/stream', on_message=on_message)
+ws.run_forever()
+```
+
+### 3) Crear order w firm (Node.js ex)
+
+```{javascript}
+const crypto = require('crypto')
+fn sign(secret, msg){
+  return crypto.createHmac('sha256', secret).update(msg).digest('hex')
+}
+
+const ts = Date.now()
+const payload = ts + 'POST' + '/api/v1/order' + JSON.stringify({symbol:'BTCUSD',side:'BUY',qty:0.001})
+const sig = sign('MI_SECRET', payload)
+// Luego enviar in headers: X-API-KEY, X-SIGNATURE, X-TIMESTAMP
+```
+
+## Testing of security y compliance
+
+- Pruebas of fuzzing, análisis SAST/DAST, pentests regulares.
+- Revisiones of licences of dependencias y políticas of privacity.
+
+## Performance & escalado
+
+- Usar caches (Redis) 4respuestas of market of low latency.
+- Implementar circuit breakers y colas asíncronas 4heavyTasks (retiros, liquidaciones).
+- Sharding of matching engine y particionado horizontal.
+
+## Manage of incidentes & comunicación
+
+- Plan of incidentes w playbooks: detección, mitigación, comunicación y postmortem.
+- Comunicar tiempos estimados y acciones a usuarios; publicar status page.
+
+## Plantilla fast of checklist of lanzamiento of API
+
+1. Especificación OpenAPI completa & validada.
+2. Env sandbox disponible & aislado.
+3. Políticas of rate limit definidas & publicadas.
+4. Monitorización y alertas configuradas.
+5. Auditoría & logging habilitados w retención.
+6. Pruebas of security completadas (SAST/DAST, pentest).
+7. Plan of rollback & communication plan.
+
+## Glossary
+
+- HMAC: Hash-based Message Authentication Code
+- JWT: JSON Web Token
+- mTLS: Mutual TLS
+- ETag: Entity Tag (HTTP caching)
+- FIX: Financial Information eXchange
+
+## Bibliografy & reSrcs
+
+- OpenAPI Specification — https://spec.openapis.org/
+- RFC 7231 (HTTP/1.1) — Semantic & codes of status
+- OWASP API Security Top 10 — GPs & amenazas
+- Doc pública of Binance, Coinbase, Kraken APIs (4exs)
+
+## Questions 4profundizar
+
+1. Want que añada 1 OpenAPI full of ex 4importar in Swagger?
+2. Want snippets adicionales for Java, Go o Rust?
+3. Want que genere tests automatizados (contract tests) y 1 little runner CI?
+
+---
