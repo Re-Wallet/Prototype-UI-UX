@@ -183,6 +183,15 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
             </span>
           </div>
 
+          {typeof transaction.feeLamports === 'number' && transaction.feeLamports > 0 && (
+            <div className="flex justify-between">
+              <span className="text-zinc-400">Fee de red</span>
+              <span className="text-white font-medium tabular-nums">
+                {(transaction.feeLamports / 1_000_000_000).toFixed(9).replace(/0+$/, '').replace(/\.$/, '')} SOL
+              </span>
+            </div>
+          )}
+
           {transaction.note && (
             <div className="flex justify-between pt-1 border-t border-white/5">
               <span className="text-zinc-400">Nota / Memo</span>
