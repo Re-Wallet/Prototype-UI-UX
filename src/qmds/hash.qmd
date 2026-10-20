@@ -1,0 +1,100 @@
+---
+title: "hash Disambiguation"
+description: "Multidisciplinary analysis of the term 'hash'."
+author: "Ollama Swarm + Laya"
+date: "2026-10-20"
+lang: en
+categories: [Disambiguation, Swarm]
+format: html
+toc: true
+math: false
+bibliography: ReferencesBib
+csl: IeeeCsl
+cite-method: citeproc
+generator-script: "generate-note-swarm-v16.sh"
+---
+
+## Sense 1: Linguistic Sense
+
+### Def
+"Hash" in linguistics refers to a process of transforming a piece of text or data into a fixed-length string of characters, often used for indexing, data storage, and security purposes.
+
+### CTP
+The resulting string, called a "hash value" or "digest," is unique to the original input and is generally irreversible to recover the original data. Common hash functions include SHA-256 and MD5.
+
+### Ex
+The password "secret" might be hashed to "a1b2c3d4" using a hash function. This hashed value is stored instead of the original password, making it more difficult for attackers to access the actual password.
+
+## Sense 2: Logical Sense
+
+### Def
+A "hash" in the context of logical sense refers to a function that maps an input (or set of inputs) to a fixed-size set of values, typically a string or a number, in a way that is deterministic, meaning the same input always produces the same output, and different inputs produce different outputs with a very high probability. This mapping is often used to uniquely identify or index data, ensuring that each piece of data corresponds to a unique hash value.
+
+### CTP
+Hash functions have several core principles and characteristics that define their behavior and make them useful in various applications:
+
+1. **Deterministic**: Given the same input, a hash function will always produce the same output. This consistency is crucial for reliably identifying data.
+2. **Fixed-size output**: regardless of the size of the input, a hash function produces a output of a fixed length. This makes it easier to store and compare hash values.
+3. **Efficiency**: A good hash function is computationally efficient, meaning it can quickly generate a hash value for any given input.
+4. **Avalanche effect**: A small change in the input should result in a significant change in the output, making it difficult to predict the output from the input.
+5. **One-way**: It is computationally infeasible to determine the input data from its hash value alone, making hash functions useful for data security and integrity checks.
+6. **Non-invertibility**: Since hash functions are one-way, finding two different inputs that produce the same output (a collision) is possible, but finding the original input from the hash output is not feasible within a reasonable time frame for secure hash functions.
+
+### Ex
+**Example of a hash function in use:**
+Consider a database that needs to store and quickly retrieve user information. Instead of storing the full name, which could be variable in length and slow to compare, a hash of the name is computed and stored. When a user is searched by name, the input name is hashed, and the resulting hash is compared to the stored hashes. This comparison is much faster than comparing the full name directly, and it can be done efficiently due to the fixed-size nature of the hash output.
+
+In Python, you might use the `hashlib` library to compute a hash of a string. Here's a simple example using the SHA-256 hash function:
+
+This example demonstrates how a string can be hashed to produce a unique (albeit not unbreakable) hash value, which can then be used for various purposes such as data storage and retrieval, or in security applications like password storage.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define logical variables
+A, B = sp.symbols('A B')
+
+# Logical implication: A only if B
+implication = sp.Implies(A, B)
+
+# Example: If A is True, then B must also be True
+example = sp.simplify(implication.subs({A: True, B: True}))
+example
+```
+
+## Sense 3: General Sense
+
+### Def
+A hash is a function that converts input data of arbitrary size into a fixed-size output, typically a string of characters.
+
+### CTP
+- Hash functions are deterministic, meaning the same input always produces the same output.
+- Hash functions are designed to be fast to compute.
+- Hash functions should be collision-resistant, meaning it should be difficult to find two different inputs that produce the same output hash.
+- Hash functions are often used in data structures like hash tables to quickly locate information.
+
+### Ex
+Imagine you have a list of names and you want to quickly find a specific name. You could use a hash function to convert each name into a fixed-size string (hash), and store these hashes in a hash table. When you need to find a name, you compute its hash and look up the corresponding location in the hash table.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# A simple hash function example
+def simple_hash(name):
+    hash_value = 0
+    for char in name:
+        hash_value += ord(char)
+    return hash_value % 100  # Simplified to a fixed size
+
+# Example usage
+names = ['Alice', 'Bob', 'Charlie']
+hashes = {name: simple_hash(name) for name in names}
+print(hashes)
+```
+
+
+::: {.callout-note}
+Because "hash" is context-dependent, verify the intended sense before applying examples or formalizations. Formal content is expressed as Python code using SymPy.
+:::
