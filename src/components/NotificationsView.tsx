@@ -36,13 +36,15 @@ function iconFor(type: string) {
       </div>
     );
   }
-  if (type === 'transfer_sent') {
+  // Outgoing: in-app transfer and external withdrawal share the up-right arrow.
+  if (type === 'transfer_sent' || type === 'withdrawal_sent') {
     return (
       <div className="w-10 h-10 rounded-full bg-[#ff5a1f]/12 border border-[#ff5a1f]/25 flex items-center justify-center text-[#ff5a1f]">
         <ArrowUpRight className="w-5 h-5 stroke-[2.2]" />
       </div>
     );
   }
+  // Incoming: in-app transfer and external deposit share the down-left arrow.
   return (
     <div className="w-10 h-10 rounded-full bg-[#10b981]/12 border border-[#10b981]/25 flex items-center justify-center text-[#10b981]">
       <ArrowDownLeft className="w-5 h-5 stroke-[2.2]" />
