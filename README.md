@@ -474,9 +474,6 @@ Deliberate prototype constraints — tracked, not accidental:
 - **Links are replayable.** `/pay` carries recipient/mint/cluster/amount/message
   but no reference or expiry; nothing binds a link to a single settlement.
   `payment_links` is modelled in the schema for the beta fix.
-- **User provisioning is manual.** The webhook and ledger only project
-  movements for pubkeys present in `users` (seeded for the prototype). Beta
-  registers the user row at sign-up.
 - **Sweeper is a reconciliation job.** The ledger updates itself through the
   webhook and Neon Realtime; the sweeper (300 s, adaptive backoff) exists to
   repair a missed delivery, not to drive the UI.
@@ -497,13 +494,12 @@ product loop before infrastructure work. The path to the first beta users:
    the webhook projection and idempotency keys carried over unchanged.
 2. ~~**Real-time propagation**~~ — **done:** Neon Realtime streams row changes
    to the UI; the sweeper was demoted to a reconciliation job.
-3. **User registration at sign-up** — insert the `users` row on first Dynamic
-   login so every account is projectable by the webhook from day one.
+3. ~~**User registration at sign-up**~~ — **done:** the `users` row is created
+   on first Dynamic login, so every account is projectable by the webhook
+   from day one.
 4. **Single-use payment links** — persist `payment_links` with an on-chain
    reference per charge so a link settles once and reconciles exactly.
-5. **Mainnet + production RPC** — move off public devnet endpoints to a
-   dedicated provider; enable mainnet USDC.
-6. **Fee abstraction** — sponsor the network fee so payers can settle in
+5. **Fee abstraction** — sponsor the network fee so payers can settle in
    USDC without holding SOL (rent remains payer-funded by design).
 
 ## License
