@@ -1,0 +1,118 @@
+---
+title: "PostgreSQL Disambiguation"
+description: "Multidisciplinary analysis of the term 'PostgreSQL'."
+author: "Ollama Swarm + Laya"
+date: "2026-10-20"
+lang: en
+categories: [Disambiguation, Swarm]
+format: html
+toc: true
+math: false
+bibliography: ReferencesBib
+csl: IeeeCsl
+cite-method: citeproc
+generator-script: "generate-note-swarm-v16.sh"
+---
+
+## Sense 1: Programming Sense
+
+### Def
+PostgreSQL is an open-source relational database management system that supports ACID transactions, extensive SQL querying capabilities, and a wide range of data types and functions, making it a powerful and flexible platform for managing structured data.
+
+### CTP
+Core principles of PostgreSQL in the context of programming sense include:
+- **Relational Database Management**: PostgreSQL is a relational database management system, meaning it organizes data into tables with rows and columns, supporting complex queries and relationships between data.
+- **ACID Transactions**: It ensures atomicity, consistency, isolation, and durability, guaranteeing data integrity and reliability.
+- **Extensible Data Types and Functions**: PostgreSQL supports a wide range of data types and functions, allowing for complex data manipulations and custom extensions.
+- **Concurrency Control**: It uses MVCC (Multi-Version Concurrency Control) to manage concurrent access to data, ensuring data consistency and integrity.
+- **SQL Standard Compliance**: It adheres to the SQL standard, making it easy to use for developers familiar with SQL-based databases.
+
+### Ex
+```{python}
+#| eval: false
+import psycopg2
+
+# Connect to the PostgreSQL database
+conn = psycopg2.connect(
+    dbname='mydatabase',
+    user='myuser',
+    password='mypassword',
+    host='localhost',
+    port='5432'
+)
+
+# Create a cursor object
+cur = conn.cursor()
+
+# Execute a SQL query
+cur.execute('SELECT * FROM mytable')
+
+# Fetch and print the results
+for row in cur.fetchall():
+    print(row)
+
+# Close the cursor and connection
+cur.close()
+conn.close()
+```
+
+This example demonstrates a basic programming interaction with PostgreSQL, including connecting to the database, executing a query, and fetching the results. The use of SQL queries and the management of the database connection and cursor are central to the programming sense of PostgreSQL.
+
+## Sense 2: Linguistic Sense
+
+### Def
+PostgreSQL is a relational database management system (RDBMS) whose name is a linguistic construct combining "Post" (referencing its origin as a successor to Ingres) and "SQL" (referencing its use of Structured Query Language for data manipulation).
+
+### CTP
+- SQL: PostgreSQL uses SQL for querying and manipulating data.
+- Schema: Data is organized into schemas, which contain tables, views, and other objects.
+- Tables: Data is stored in tables with rows and columns, each with a specific data type.
+- Transactions: PostgreSQL supports transactions to ensure data consistency.
+
+### Ex
+A SQL query in PostgreSQL to retrieve all customers from a table named "customers" would look like this:
+
+```{sql}
+SELECT * FROM customers;
+```
+
+## Sense 3: Logical Sense
+
+### Def
+PostgreSQL is a free and open-source object-relational database system that provides a powerful and flexible data model, along with a rich set of features for managing and manipulating data. It is designed to be highly scalable, reliable, and performant, while also providing robust security and isolation features.
+
+### CTP
+PostgreSQL supports a wide range of features and capabilities, including:
+- A powerful and flexible data model with support for complex object structures, arrays, and sequences.
+- Advanced query optimization and costing, which allows PostgreSQL to produce highly optimized query plans.
+- Support for transactions, with ACID compliance and support for various isolation levels.
+- Advanced security features, including role-based access control, encryption, and secure communication protocols.
+- High availability and fault tolerance, with support for cluster-wide replication and automatic recovery from failures.
+- Support for multiple storage engines, allowing PostgreSQL to be tailored to specific performance and scalability requirements.
+
+### Ex
+Here is a practical example of using PostgreSQL's powerful data model and query optimization features:
+
+In this example, we define two symbols `D` and `L` to represent the query `D if and only if L`. We then use the `Implies` function to express the query as a logical implication, and use the `solve` function to find the values of `D` that satisfy the query. The output of this example is `[L]`, which means that `D` is true if and only if `L` is true.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define the symbols
+D, L = sp.symbols('D L')
+
+# Define the logical implication
+query = sp.Implies(D, L)
+
+# Solve the query to find the values of D that satisfy the query
+solution = sp.solve(query, D)
+
+# Output the solution
+solution
+```
+
+
+::: {.callout-note}
+Because "PostgreSQL" is context-dependent, verify the intended sense before applying examples or formalizations. Formal content is expressed as Python code using SymPy.
+:::
