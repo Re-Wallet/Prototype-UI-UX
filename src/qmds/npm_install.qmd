@@ -1,0 +1,147 @@
+---
+title: "npm install Disambiguation"
+description: "Brief abstract | summ of the document's objectives."
+author: "Ollama (qwen2.5-coder:32b-instruct)"
+date: "2026-08-25"
+lang: en
+categories: [Disambiguation]
+format: html
+toc: true
+bibliography: ReferencesBib
+csl: IeeeCsl                 
+cite-method: citeproc
+---
+
+## Def1 - Installing Node Packages
+
+### Def
+The most common usage of `npm install` is to install packages listed in the `package.json` file of a Node.js project.
+
+### CTP
+When executed in a directory containing a `package.json` file, `npm install` reads the file and installs all the dependencies listed under `dependencies` and `devDependencies`.
+
+### Ex 
+```{bash}
+npm install
+```
+
+::: {.callout-note}
+If `package-lock.json` exists, `npm install` will install the exact versions specified in that file to ensure consistency across environments.
+:::
+
+## Installing a Specific Package
+
+### Def
+Used to install a specific package that is not already listed in `package.json`.
+
+### CTP
+This command adds the package to `node_modules` and updates the `package.json` and `package-lock.json` files with the new dependency.
+
+### Ex 
+```{bash}
+npm install lodash
+```
+
+## Installing a Package Globally
+
+### Def
+Installs a package globally, making it available across all Node.js projects.
+
+### CTP
+Global installations do not modify the `package.json` or `package-lock.json` of the current project. Instead, the package is installed in a global directory.
+
+### Ex 
+```{bash}
+npm install -g eslint
+```
+
+## Installing a Specific Version of a Package
+
+### Def
+Allows installation of a specific version of a package.
+
+### CTP
+This is useful when a specific version of a package is required for compatibility reasons.
+
+### Ex 
+```{bash}
+npm install lodash@4.17.21
+```
+
+## Installing Packages from a URL
+
+### Def
+Installs a package directly from a URL, such as a GitHub repository.
+
+### CTP
+This can be useful for installing packages that are not available on the npm registry.
+
+### Ex 
+```{bash}
+npm install https://github.com/user/package.git
+```
+
+## Installing Packages from a Local Directory
+
+### Def
+Installs a package from a local directory on the filesystem.
+
+### CTP
+This is useful for testing or using packages that are not yet published to the npm registry.
+
+### Ex 
+```{bash}
+npm install ./path/to/package
+```
+
+## Installing Packages with a Prefix
+
+### Def
+Installs packages with a custom prefix, which can be useful for managing multiple versions of Node.js or npm.
+
+### CTP
+This changes the default directory where npm installs global packages.
+
+### Ex 
+```{bash}
+npm install -g --prefix=/custom/path lodash
+```
+
+## Installing Peer Dependencies
+
+### Def
+Installs peer dependencies required by a package.
+
+### CTP
+Some packages rely on peer dependencies, which need to be installed manually or can be installed automatically with the `--include=peer` flag.
+
+### Ex 
+```{bash}
+npm install --include=peer some-package
+```
+
+## Installing Packages with a Specific Version Range
+
+### Def
+Installs a package within a specified version range.
+
+### CTP
+This allows flexibility in specifying the version of a package that can be installed.
+
+### Ex 
+```{bash}
+npm install lodash@">=4.0.0 <5.0.0"
+```
+
+## Installing Packages with a Dry Run
+
+### Def
+Simulates an installation without actually installing the packages.
+
+### CTP
+Useful for testing and verifying what packages and versions will be installed.
+
+### Ex 
+```{bash}
+npm install --dry-run
+```
