@@ -305,8 +305,39 @@ function movementType(symbol: string, outgoing: boolean): PersistedMovement['typ
   return outgoing ? 'sent' : 'received';
 }
 
-function directionTitle(symbol: string, outgoing: boolean): string {
-  return `${outgoing ? 'Envío' : 'Ingreso'} ${symbol}`;
+/**
+ * Human label for a counterparty: `@handle` when the peer is a registered
+ * ReWallet user, otherwise a truncated address. Notifications must never show
+ * a raw 44-char base58 string.
+ */
+function counterpartyLabel(
+  peer: { handle: string | null; name: string | null } | undefined,
+  address: string
+): string {
+  if (peer?.handle) return `@${peer.handle}`;
+  if (peer?.name) return peer.name;
+  return `${address.slice(0, 4)}…${address.slice(-4)}`;
+}
+
+/**
+ * Direction of a movement, refined beyond sent/received by whether the peer is
+ * another ReWallet user. This is the discriminator the notifications key off:
+ *
+ *   - `transfer`  — peer is a registered ReWallet wallet (in-app P2P)
+ *   - `deposit`   — funds arriving from an external wallet
+ *   - `withdrawal`— funds leaving to an external wallet
+ */
+type MovementDirection = 'transfer' | 'deposit' | 'withdrawal';
+
+function movementDirection(outgoing: boolean, peerRegistered: boolean): MovementDirection {
+  if (peerRegistered) return 'transfer';
+  return outgoing ? 'withdrawal' : 'deposit';
+}
+
+/** `directionTitle` mirrors the same three-way split for the transaction label. */
+function directionTitle(symbol: string, direction: MovementDirection): string {
+  if (direction === 'transfer') return `Transferencia ${symbol}`;
+  return `${direction === 'withdrawal' ? 'Retiro' : 'Depósito'} ${symbol}`;
 }
 
 /**
@@ -356,7 +387,12 @@ export async function projectWalletActivity(
 ): Promise<ProjectionResult> {
   const sides = [...new Set([activity.fromAddress, activity.toAddress])];
   const userRows = await db
-    .select({ id: usersTable.id, publicKey: usersTable.publicKey })
+    .select({
+      id: usersTable.id,
+      publicKey: usersTable.publicKey,
+      handle: usersTable.handle,
+      name: usersTable.name,
+    })
     .from(usersTable)
     .where(inArray(usersTable.publicKey, sides));
 
@@ -387,6 +423,11 @@ export async function projectWalletActivity(
 
     const outgoing = subject === activity.fromAddress;
     const counterpartyPubkey = outgoing ? activity.toAddress : activity.fromAddress;
+    // A peer present in `registered` is another ReWallet user; that turns a
+    // generic sent/received into an in-app transfer with a named counterparty.
+    const peer = registered.get(counterpartyPubkey);
+    const peerRegistered = peer !== undefined;
+    const peerLabel = counterpartyLabel(peer, counterpartyPubkey);
 
     const movements: PersistedMovement[] = [];
     /** Notification copies built alongside the movements, written after the upsert. */
@@ -415,6 +456,8 @@ export async function projectWalletActivity(
 
       const isSol = asset.symbol === 'SOL';
       const transferOutgoing = transfer.fromAddress === subject;
+      const direction = movementDirection(transferOutgoing, peerRegistered);
+      const amount = `${transfer.amount} ${asset.symbol}`;
 
       movements.push({
         referenceId: `${activity.transactionHash}-${asset.symbol}`,
@@ -434,8 +477,9 @@ export async function projectWalletActivity(
         metadataJson: {
           assetSymbol: asset.symbol,
           walletAddress: subject,
-          title: directionTitle(asset.symbol, transferOutgoing),
+          title: directionTitle(asset.symbol, direction),
           counterparty: counterpartyPubkey,
+          ...(peerRegistered ? { counterpartyHandle: peer?.handle ?? null } : {}),
           source: 'dynamic-webhook',
           ...(canonicalExplorerUrl ? { explorerUrl: canonicalExplorerUrl } : {}),
           ...(activity.fee !== undefined
@@ -447,30 +491,54 @@ export async function projectWalletActivity(
         createdAt: timestamp,
       });
 
-      notificationDrafts.push({
-        type: failed
-          ? 'transfer_failed'
-          : transferOutgoing
-            ? 'transfer_sent'
-            : 'payment_received',
-        title: failed
-          ? 'Envío falló'
-          : `${transferOutgoing ? 'Envío' : 'Ingreso'} ${asset.symbol}`,
-        message: failed
-          ? `Tu transferencia de ${transfer.amount} ${asset.symbol} no se pudo completar.`
-          : transferOutgoing
-            ? `Enviaste ${transfer.amount} ${asset.symbol}.`
-            : `Recibiste ${transfer.amount} ${asset.symbol} en tu cuenta.`,
-        symbol: asset.symbol,
-        outgoing: transferOutgoing,
-        amount: transfer.amount,
-      });
+      // One precise banner per movement. Row 1 is the amount (the headline the
+      // user scans first); row 2 is the action and counterparty.
+      const signedAmount = `${transferOutgoing || direction === 'withdrawal' ? '−' : '+'}${amount}`;
+      notificationDrafts.push(
+        failed
+          ? {
+              type: 'transfer_failed',
+              title: `${amount} no se completó`,
+              message: `Tu ${transferOutgoing ? 'envío' : 'recepción'} falló.`,
+              symbol: asset.symbol,
+              outgoing: transferOutgoing,
+              amount: transfer.amount,
+            }
+          : direction === 'transfer'
+            ? {
+                type: transferOutgoing ? 'transfer_sent' : 'transfer_received',
+                title: signedAmount,
+                message: transferOutgoing
+                  ? `Enviaste a ${peerLabel}`
+                  : `Recibiste de ${peerLabel}`,
+                symbol: asset.symbol,
+                outgoing: transferOutgoing,
+                amount: transfer.amount,
+              }
+            : direction === 'withdrawal'
+              ? {
+                  type: 'withdrawal_sent',
+                  title: signedAmount,
+                  message: `Retiro a ${peerLabel}`,
+                  symbol: asset.symbol,
+                  outgoing: true,
+                  amount: transfer.amount,
+                }
+              : {
+                  type: 'deposit_received',
+                  title: signedAmount,
+                  message: `Depósito de ${peerLabel}`,
+                  symbol: asset.symbol,
+                  outgoing: false,
+                  amount: transfer.amount,
+                }
+      );
     }
 
     if (movements.length === 0) continue;
     projectable = true;
 
-    const result = await upsertTransactions(user.id, movements);
+    const result = await upsertTransactions(user.id, movements, subject);
     projected += result.inserted + result.updated;
 
     for (const draft of notificationDrafts) {

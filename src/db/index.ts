@@ -1,38 +1,49 @@
 /**
- * Drizzle + SQLite connection (prototype).
+ * Drizzle + PostgreSQL connection (Neon).
  *
- * The database file lives at ./data/rewallet.db by default and is ignored by git.
- * Override with DATABASE_URL, e.g. DATABASE_URL=file:./data/dev.db
+ * DATABASE_URL is pulled into .env.local by `neon deploy`. dotenv is loaded
+ * here because ESM evaluates imported modules (this one) before the importing
+ * module's body runs — server.ts calls dotenv.config() at line 25, after its
+ * own imports have already executed. dotenv never overwrites existing keys,
+ * so the double load is harmless.
  */
 
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import dotenv from 'dotenv';
+dotenv.config({ path: ['.env.local', '.env'] });
+
+import { Pool } from 'pg';
+import { drizzle } from 'drizzle-orm/node-postgres';
 
 import * as schema from './schema';
 
-const DEFAULT_DB_PATH = './data/rewallet.db';
-
-function resolveDatabasePath(): string {
-  const raw = process.env.DATABASE_URL?.trim();
-
-  if (!raw) return DEFAULT_DB_PATH;
-  if (raw.startsWith('file:')) return raw.slice('file:'.length);
-  return raw;
+const connectionString = process.env.DATABASE_URL;
+if (!connectionString?.startsWith('postgres://') && !connectionString?.startsWith('postgresql://')) {
+  throw new Error(
+    'DATABASE_URL is missing or not a postgres URL. Run `neon env pull` in the project root.'
+  );
 }
 
-const dbPath = resolveDatabasePath();
-mkdirSync(dirname(resolve(dbPath)), { recursive: true });
+export const pool = new Pool({
+  connectionString,
+  // Neon suspends idle computes and drops pooled sockets when it does, so the
+  // defaults (max 10, 10s idle) keep more connections than this single-process
+  // API needs and hold them open past a suspend. A small, short-lived pool
+  // reconnects cleanly on wake instead of handing out a dead socket.
+  max: 5,
+  idleTimeoutMillis: 30_000,
+  // Neon's first connect after a suspend pays the compute wake-up (~500ms);
+  // the default 0 (wait forever) would hang a request instead of failing it.
+  connectionTimeoutMillis: 10_000,
+});
 
-export const sqlite = new Database(dbPath);
+// A pooled socket can die between checkout and query (compute suspend, network
+// reset). node-postgres emits it here; without a handler it is an unhandled
+// 'error' event that crashes the whole server.
+pool.on('error', (error) => {
+  console.error('⚠️  idle Postgres client error:', error.message);
+});
 
-// Pragmas: WAL for concurrent reads, FK enforcement, sane durability for dev.
-sqlite.pragma('journal_mode = WAL');
-sqlite.pragma('foreign_keys = ON');
-sqlite.pragma('synchronous = NORMAL');
-
-export const db = drizzle(sqlite, { schema });
+export const db = drizzle(pool, { schema });
 
 export type Db = typeof db;
 

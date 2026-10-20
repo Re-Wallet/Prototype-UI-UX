@@ -21,6 +21,8 @@ export interface Transaction {
   note?: string;
   txHash?: string;
   walletAddress?: string;
+  /** Network fee in lamports, when the source (webhook or RPC) reported it. */
+  feeLamports?: number;
 }
 
 export interface Contact {

@@ -6,6 +6,8 @@
  */
 
 import type { Transaction } from '../types/wallet';
+import type { SealedLiveQuery } from '@neon/realtime/client';
+import type { LiveTransactionRow } from './transactionMapper';
 
 const API_BASE =
   import.meta.env.VITE_API_URL?.trim() || 'http://127.0.0.1:3001';
@@ -174,6 +176,27 @@ export async function fetchWalletTransactions(
       ...row,
       date: new Date(row.date),
     }));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Mint a sealed Neon Realtime capability for the user's transaction live
+ * query. Fail-soft (null): without a capability the UI keeps the REST +
+ * RPC paths, exactly like `fetchWalletTransactions`.
+ */
+export async function fetchSealedTransactions(
+  walletAddress: string
+): Promise<SealedLiveQuery<LiveTransactionRow> | null> {
+  try {
+    return await request<SealedLiveQuery<LiveTransactionRow>>(
+      '/api/wallet/transactions/live',
+      {
+        method: 'POST',
+        body: JSON.stringify({ wallet: walletAddress }),
+      }
+    );
   } catch {
     return null;
   }

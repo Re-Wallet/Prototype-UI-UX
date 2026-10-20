@@ -1,8 +1,8 @@
 /**
  * ReWallet local wallet API server.
  *
- * Express wrapper over persisted SQLite wallet records. Runs on port 3001.
- * Serves the read API for the UI, the Dynamic webhook receiver, and the
+ * Express wrapper over persisted wallet records (Neon Postgres). Runs on port
+ * 3001. Serves the read API for the UI, the Dynamic webhook receiver, and the
  * periodic chain sweeper that keeps `transactions` fresh where webhooks do
  * not reach (failed transactions are invisible to `wallet.activity`).
  *
@@ -13,6 +13,11 @@
  * Environment:
  *   DYNAMIC_WEBHOOK_SECRET  HMAC secret for x-dynamic-signature-256. Without
  *                           it the signature check is skipped (dev only).
+ *   DYNAMIC_API_TOKEN       Dashboard API token for the landing metrics
+ *                           topline (scope environment.analytics.read).
+ *   DYNAMIC_ENVIRONMENT_ID  Environment UUID (falls back to
+ *                           VITE_DYNAMIC_ENVIRONMENT_ID).
+ *   DYNAMIC_METRICS_TTL_MS  Landing metrics snapshot TTL (default 5 min).
  *   SWEEPER_DISABLED=1      Disables the periodic history sweep.
  */
 
@@ -37,7 +42,10 @@ import {
   upsertContactByPubkey,
 } from './src/services/wallet';
 import { getBalances } from './src/services/balanceCache';
+import { getLandingMetrics } from './src/services/dynamicMetrics';
 import { syncAllWallets } from './src/services/historySync';
+import { noteCleanSweep, noteRateLimit } from './src/services/rpcThrottle';
+import { sealLiveTransactions } from './src/services/realtimeServer';
 import {
   markWebhookProcessed,
   parseEnvelope,
@@ -46,6 +54,8 @@ import {
   recordWebhookDelivery,
   verifyDynamicSignature,
 } from './src/services/webhookIngestor';
+import { db, pool } from './src/db';
+import { landingSurveyResponses } from './src/db/schema';
 
 const app = express();
 const PORT = Number(process.env.API_PORT ?? 3001);
@@ -159,11 +169,43 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
 // HEALTH
 // ============================================================================
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', async (_req, res) => {
+  // Postgres probe — proves the Neon ledger is reachable.
+  let database: { status: string; error?: string };
+  try {
+    await pool.query('SELECT 1');
+    database = { status: 'ok' };
+  } catch (error) {
+    database = {
+      status: 'error',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  // Neon Functions probe — hits the deployed `hello` function.
+  const fnUrl = process.env.NEON_FUNCTION_HELLO_BASE_URL;
+  let neonFunction: { status: string; url?: string; error?: string };
+  if (!fnUrl) {
+    neonFunction = { status: 'not_configured' };
+  } else {
+    try {
+      const fnRes = await fetch(fnUrl, { signal: AbortSignal.timeout(4000) });
+      neonFunction = { status: fnRes.ok ? 'ok' : `http_${fnRes.status}`, url: fnUrl };
+    } catch (error) {
+      neonFunction = {
+        status: 'error',
+        url: fnUrl,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   res.json({
-    status: 'ok',
+    status: database.status === 'ok' ? 'ok' : 'degraded',
     service: 'rewallet-prototype-api',
     cluster: process.env.VITE_SOLANA_CLUSTER ?? 'devnet',
+    database,
+    neonFunction,
     timestamp: new Date().toISOString(),
   });
 });
@@ -187,6 +229,30 @@ app.get('/api/wallet/transactions', async (req, res) => {
   const user = wallet ? await getUserByPubkey(wallet) : await getPrimaryUser();
   if (!user) return res.status(404).json({ error: 'No wallet data is available.' });
   res.json(await listTransactions(user.id));
+});
+
+/**
+ * Mint a sealed Neon Realtime capability for this user's transaction list
+ * (roadmap: real-time propagation). The browser subscribes through the
+ * Realtime WebSocket; inserts/updates to `transactions` that match the
+ * query reach the UI without a refetch. The DB query itself never leaves
+ * the server — only its encrypted, expiring capability does.
+ */
+app.post('/api/wallet/transactions/live', async (req, res) => {
+  const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
+  if (!wallet || !BASE58_RE.test(wallet)) {
+    return res.status(400).json({ error: 'wallet body field must be a base58 Solana address.' });
+  }
+  try {
+    const user = await getUserByPubkey(wallet);
+    if (!user) return res.status(404).json({ error: 'No wallet data is available.' });
+    res.json(await sealLiveTransactions(user.id));
+  } catch (error) {
+    // Fail soft: without a capability the UI keeps its REST + RPC paths.
+    res.status(503).json({
+      error: error instanceof Error ? error.message : 'Realtime is not configured.',
+    });
+  }
 });
 
 /**
@@ -350,6 +416,83 @@ app.patch('/api/settings/language', async (req, res) => {
 });
 
 // ============================================================================
+// LANDING METRICS (Dynamic topline, cached)
+// ============================================================================
+
+/**
+ * The landing's metric strip (users / wallets / sessions) reads from here.
+ * Numbers come from Dynamic's Dashboard API but are served from a SQLite
+ * snapshot so the token stays server-side and the static landing only ever
+ * calls our API. Fail-soft: always 200 with the best snapshot available.
+ */
+app.get('/api/landing/metrics', async (_req, res) => {
+  try {
+    res.json(await getLandingMetrics());
+  } catch (error) {
+    console.error('⚠️  /api/landing/metrics:', error);
+    res.json({ users: 0, wallets: 0, sessions: 0, fetchedAt: null });
+  }
+});
+
+// ============================================================================
+// LANDING SURVEY (opiniones)
+// ============================================================================
+
+/**
+ * The landing's "Opinion" section posts here. Answer keys mirror the option
+ * values in landing/index.html; q2 is a JSON array (multi-select) and q4 is
+ * optional. Validation is duplicated server-side so a crafted client cannot
+ * write garbage into `landing_survey_responses`.
+ */
+const SURVEY_Q1 = new Set(['ahorrar', 'remesas']);
+const SURVEY_Q2 = new Set(['efectivo', 'banco', 'apps', 'exchanges', 'sin_dolares']);
+const SURVEY_Q3 = new Set(['miedo_claves', 'redes_gas', 'comisiones', 'no_necesito']);
+const SURVEY_Q4 = new Set(['lt_50', '50_200', '200_1000', 'gt_1000']);
+const SURVEY_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+app.post('/api/landing/survey', async (req, res) => {
+  const { name, lastName, email, q1, q2, q3, q4 } = req.body ?? {};
+
+  if (typeof name !== 'string' || !name.trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
+  if (typeof lastName !== 'string' || !lastName.trim()) {
+    return res.status(400).json({ error: 'lastName is required' });
+  }
+  if (typeof email !== 'string' || !SURVEY_EMAIL_RE.test(email.trim())) {
+    return res.status(400).json({ error: 'a valid email is required' });
+  }
+  if (typeof q1 !== 'string' || !SURVEY_Q1.has(q1)) {
+    return res.status(400).json({ error: 'q1 is required' });
+  }
+  if (!Array.isArray(q2) || q2.length === 0 || !q2.every((v) => SURVEY_Q2.has(v))) {
+    return res.status(400).json({ error: 'q2 needs at least one option' });
+  }
+  if (typeof q3 !== 'string' || !SURVEY_Q3.has(q3)) {
+    return res.status(400).json({ error: 'q3 is required' });
+  }
+  if (q4 !== undefined && q4 !== null && q4 !== '' && !SURVEY_Q4.has(q4)) {
+    return res.status(400).json({ error: 'q4 has an invalid value' });
+  }
+
+  try {
+    await db.insert(landingSurveyResponses).values({
+      name: name.trim(),
+      lastName: lastName.trim(),
+      email: email.trim(),
+      q1,
+      q2: JSON.stringify(q2),
+      q3,
+      q4: q4 || null,
+    });
+    res.status(201).json({ ok: true });
+  } catch (error) {
+    console.error('⚠️  POST /api/landing/survey:', error);
+    res.status(500).json({ error: 'No se pudo guardar tu respuesta.' });
+  }
+});
+
+// ============================================================================
 // STATIC (production build)
 // ============================================================================
 
@@ -370,7 +513,8 @@ app.listen(PORT, HOST, () => {
   console.log(`   POST /api/wallet/contacts`);
   console.log(`   GET  /api/wallet/balances?wallet=<address>&fresh=1`);
   console.log(`   GET  /api/wallet/notifications?wallet=<address>`);
-  console.log(`   POST /api/wallet/notifications/read\n`);
+  console.log(`   POST /api/wallet/notifications/read`);
+  console.log(`   GET  /api/landing/metrics\n`);
 
   startHistorySweeper();
 });
@@ -383,7 +527,15 @@ app.listen(PORT, HOST, () => {
  * eventually corrects anything the webhook path missed. A re-entrancy guard
  * keeps overlapping runs from stacking when one sweep is slow.
  *
- * Tune with SWEEPER_INTERVAL_MS (default 120s); disable with SWEEPER_DISABLED=1.
+ * The public devnet endpoint rate-limits by burst with no `Retry-After`, so a
+ * fixed cadence keeps hitting it while it is already saturated. Instead the
+ * interval stretches on failure: after a run that saw 429s the next tick is
+ * skipped and the delay doubles (base → 2x → 4x, capped), then collapses back
+ * to the base interval after a couple of clean runs. Scheduled with a
+ * self-rescheduling timeout rather than `setInterval` so the delay can change
+ * between runs.
+ *
+ * Tune with SWEEPER_INTERVAL_MS (default 300s); disable with SWEEPER_DISABLED=1.
  */
 function startHistorySweeper(): void {
   if (process.env.SWEEPER_DISABLED === '1') {
@@ -391,33 +543,61 @@ function startHistorySweeper(): void {
     return;
   }
 
-  const intervalMs = Number(process.env.SWEEPER_INTERVAL_MS ?? 120_000);
+  const baseIntervalMs = Number(process.env.SWEEPER_INTERVAL_MS ?? 300_000);
+  const maxBackoffMs = 30 * 60_000;
+  let currentDelayMs = baseIntervalMs;
   let running = false;
+  let timer: NodeJS.Timeout | undefined;
 
-  const tick = async () => {
-    if (running) return;
-    running = true;
-    try {
-      const results = await syncAllWallets(500);
-      const changed = results.filter((r) => r.inserted + r.updated > 0);
-      if (changed.length > 0) {
-        console.log(
-          `[sweeper] ${changed.length}/${results.length} wallet(s) updated: ` +
-            changed
-              .map((r) => `${r.publicKey.slice(0, 8)}… (+${r.inserted}/~${r.updated})`)
-              .join(', ')
-        );
-      }
-    } catch (error) {
-      console.error(
-        `[sweeper] run failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    } finally {
-      running = false;
-    }
+  const schedule = (delayMs: number) => {
+    timer = setTimeout(tick, delayMs);
   };
 
-  setTimeout(tick, 5_000); // first pass shortly after boot
-  setInterval(tick, intervalMs);
-  console.log(`   🧹 history sweeper every ${intervalMs / 1000}s\n`);
+  function tick(): void {
+    if (running) {
+      schedule(currentDelayMs);
+      return;
+    }
+    running = true;
+
+    void (async () => {
+      try {
+        const { results, rateLimited } = await syncAllWallets(500);
+
+        if (rateLimited) {
+          noteRateLimit();
+          currentDelayMs = Math.min(currentDelayMs * 2, maxBackoffMs);
+          console.warn(
+            `[sweeper] RPC rate-limited; backing off to ${currentDelayMs / 1000}s`
+          );
+        } else {
+          noteCleanSweep();
+          if (currentDelayMs !== baseIntervalMs) {
+            currentDelayMs = baseIntervalMs;
+            console.log(`[sweeper] RPC healthy again; cadence back to ${baseIntervalMs / 1000}s`);
+          }
+          const changed = results.filter((r) => r.inserted + r.updated > 0);
+          if (changed.length > 0) {
+            console.log(
+              `[sweeper] ${changed.length}/${results.length} wallet(s) updated: ` +
+                changed
+                  .map((r) => `${r.publicKey.slice(0, 8)}… (+${r.inserted}/~${r.updated})`)
+                  .join(', ')
+            );
+          }
+        }
+      } catch (error) {
+        console.error(
+          `[sweeper] run failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        running = false;
+        schedule(currentDelayMs);
+      }
+    })();
+  }
+
+  schedule(5_000); // first pass shortly after boot
+  console.log(`   🧹 history sweeper every ${baseIntervalMs / 1000}s (adaptive backoff)\n`);
+  process.on('SIGTERM', () => clearTimeout(timer));
 }

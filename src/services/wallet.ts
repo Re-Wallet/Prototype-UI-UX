@@ -4,7 +4,7 @@
  * Maps persisted SQLite wallet records to the API domain types.
  */
 
-import { and, desc, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 
 import { db } from '../db';
 import {
@@ -13,106 +13,19 @@ import {
   transactions as transactionsTable,
   users as usersTable,
 } from '../db/schema';
-import type { User as DbUser, Transaction as DbTransaction, Contact as DbContact } from '../db/schema';
+import type { User as DbUser, Contact as DbContact } from '../db/schema';
 
-import type {
-  Contact as UiContact,
-  Transaction as UiTransaction,
-  TransactionStatus,
-  TransactionType,
-} from '../types/wallet';
+import type { Contact as UiContact, Transaction as UiTransaction } from '../types/wallet';
+
+import { mapTransaction } from './transactionMapper';
+import { invalidateBalances } from './balanceCache';
 
 // ============================================================================
 // DOMAIN MAPPERS
 // ============================================================================
 
-const STATUS_TO_UI: Record<string, TransactionStatus> = {
-  pending: 'in_progress',
-  confirming: 'in_progress',
-  completed: 'completed',
-  failed: 'failed',
-  cancelled: 'failed',
-  expired: 'failed',
-};
-
-const TYPE_TO_UI: Record<string, TransactionType> = {
-  deposit: 'deposit',
-  withdrawal: 'withdrawal',
-  sent: 'sent',
-  received: 'received',
-};
-
-function formatTimestamp(date: Date | null): string {
-  if (!date) return 'Just now';
-  const diffMs = Date.now() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60_000);
-
-  if (diffMin < 1) return 'Just now';
-  if (diffMin < 60) return `${diffMin} min ago`;
-  if (diffMin < 1440) return `${Math.floor(diffMin / 60)} h ago`;
-  return date.toLocaleDateString();
-}
-
-/**
- * Display-only fields that have no dedicated column in `transactions`.
- *
- * The table is USDC-centric (`amount_usdc` is NOT NULL and there is no
- * `asset_symbol`), so chain-sourced movements keep the extra fidelity the UI
- * renders — asset symbol, owning address, human title — in `metadata_json`.
- */
-interface TransactionMetadata {
-  assetSymbol?: 'SOL' | 'USDC';
-  walletAddress?: string;
-  title?: string;
-  counterparty?: string;
-}
-
-function readTransactionMetadata(row: DbTransaction): TransactionMetadata {
-  const raw = row.metadataJson;
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-
-  const record = raw as Record<string, unknown>;
-  const assetSymbol =
-    record.assetSymbol === 'SOL' || record.assetSymbol === 'USDC'
-      ? record.assetSymbol
-      : undefined;
-
-  return {
-    assetSymbol,
-    walletAddress:
-      typeof record.walletAddress === 'string' ? record.walletAddress : undefined,
-    title: typeof record.title === 'string' ? record.title : undefined,
-    counterparty: typeof record.counterparty === 'string' ? record.counterparty : undefined,
-  };
-}
-
-export function mapTransaction(row: DbTransaction): UiTransaction {
-  const metadata = readTransactionMetadata(row);
-  const isSol = metadata.assetSymbol === 'SOL';
-
-  // `amount_usdc` is the canonical column, but a native-SOL movement stores 0
-  // there and keeps its real value in `amount_sol`.
-  const amount = isSol ? row.amountSol ?? 0 : row.amountUsdc;
-
-  return {
-    id: `tx-${row.id}`,
-    title: metadata.title || row.counterpartyHandle || row.method || `Transaction #${row.id}`,
-    counterparty: metadata.counterparty ?? row.counterpartyHandle ?? undefined,
-    type: TYPE_TO_UI[row.type] ?? 'sent',
-    status: STATUS_TO_UI[row.status] ?? 'in_progress',
-    amount,
-    assetSymbol: metadata.assetSymbol,
-    fiatAmount: isSol ? null : row.fiatAmount ?? row.amountUsdc,
-    fiatCurrency: row.fiatCurrency ?? 'USD',
-    timestamp: formatTimestamp(row.createdAt),
-    date: row.createdAt,
-    method: row.method ?? undefined,
-    referenceId: row.referenceId,
-    note: row.note ?? undefined,
-    txHash: row.solanaSignature ?? undefined,
-    walletAddress: metadata.walletAddress,
-  };
-}
+// Transaction row mapping lives in './transactionMapper': it is shared with
+// the browser (Neon Realtime live rows) and must stay dependency-free here.
 
 export function mapContact(row: DbContact): UiContact {
   return {
@@ -247,6 +160,45 @@ export async function listTransactions(
   }));
 }
 
+/**
+ * Drizzle selection for Neon Realtime: every `transactions` column aliased
+ * to its Drizzle JS key.
+ *
+ * `@neon/realtime-drizzle` asserts that each selected key equals the
+ * PostgreSQL result name (the proxy returns DB result names, not Drizzle's
+ * client-side mapping), and this schema maps camelCase keys onto snake_case
+ * columns — so each column needs an explicit `AS <key>` alias. Aliased rows
+ * then match `Transaction` ($inferSelect) and the shared mapper runs as-is.
+ */
+function aliasAllTransactions() {
+  return Object.fromEntries(
+    Object.entries(getTableColumns(transactionsTable)).map(([key, column]) => [
+      key,
+      sql`${column}`.as(key),
+    ])
+  );
+}
+
+/**
+ * Live-query twin of {@link listTransactions}: same filter, order, limit and
+ * peer-email resolution, but as one joinable Drizzle select that can be
+ * sealed and subscribed through the Realtime WebSocket. Every insert or
+ * update to `transactions` matching the query reaches the UI without a
+ * refetch.
+ */
+export function liveTransactionsQuery(userId: number, limit = 50) {
+  return db
+    .select({
+      ...aliasAllTransactions(),
+      counterpartyEmail: sql`${usersTable.email}`.as('counterpartyEmail'),
+    })
+    .from(transactionsTable)
+    .leftJoin(usersTable, eq(usersTable.publicKey, transactionsTable.counterpartyPubkey))
+    .where(eq(transactionsTable.userId, userId))
+    .orderBy(desc(transactionsTable.createdAt))
+    .limit(limit);
+}
+
 // ============================================================================
 // WRITE PATH (chain-sourced movements)
 // ============================================================================
@@ -280,6 +232,13 @@ export interface PersistedMovement {
 /**
  * Insert or refresh a batch of chain-sourced movements for one wallet.
  *
+ * The upsert is the single funnel every movement passes through — webhook
+ * projections and RPC sweeps alike — so it is also where the balance cache is
+ * invalidated. The chain stays the source of truth for the amount; the DB only
+ * signals *when* it changed. Passing `walletPubkey` lets that invalidation
+ * target the right cache entry without an extra lookup; omit it when the
+ * caller only has the numeric id and the balance is not cached by pubkey.
+ *
  * Idempotent on `(user_id, reference_id)`, so re-running the backfill or a
  * webhook re-projecting a transaction the sweeper already stored updates the
  * row instead of duplicating it. This is deliberately a different concern from
@@ -287,7 +246,8 @@ export interface PersistedMovement {
  */
 export async function upsertTransactions(
   userId: number,
-  movements: PersistedMovement[]
+  movements: PersistedMovement[],
+  walletPubkey?: string
 ): Promise<{ inserted: number; updated: number }> {
   if (movements.length === 0) return { inserted: 0, updated: 0 };
 
@@ -348,11 +308,19 @@ export async function upsertTransactions(
           confirmations: values.confirmations,
           confirmedAt: values.confirmedAt,
           failedReason: values.failedReason,
-          metadataJson: sql`json_patch(COALESCE(${transactionsTable.metadataJson}, '{}'), ${JSON.stringify(values.metadataJson ?? {})})`,
+          // jsonb merge (||) instead of SQLite's json_patch: shallow-merges the
+          // enrichment payload, which is flat, so parity with RFC 7396 depth
+          // does not matter here.
+          metadataJson: sql`COALESCE(${transactionsTable.metadataJson}, '{}'::jsonb) || ${JSON.stringify(values.metadataJson ?? {})}::jsonb`,
           updatedAt: values.updatedAt,
         },
       });
   }
+
+  // A movement landed: the cached balance for this wallet is now provably
+  // stale. Drop it so the next read goes to the chain. This is the one place
+  // that covers both the webhook and the sweeper — no caller can forget it.
+  if (walletPubkey) invalidateBalances(walletPubkey);
 
   return {
     inserted: movements.length - alreadyStored.size,
@@ -723,7 +691,7 @@ export async function insertNotification(userId: number, input: NotificationInpu
       and(
         eq(notificationsTable.userId, userId),
         eq(notificationsTable.type, input.type),
-        sql`json_extract(${notificationsTable.dataJson}, '$.signature') = ${input.signature}`
+        sql`${notificationsTable.dataJson}->>'signature' = ${input.signature}`
       )
     )
     .limit(1);

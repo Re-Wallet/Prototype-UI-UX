@@ -1,33 +1,37 @@
 /**
- * ReWallet Database Schema (SQLite via Drizzle ORM)
- * Prototype schema for devnet testing.
+ * ReWallet Database Schema (PostgreSQL via Drizzle ORM)
+ * Deployed on Neon; mirrors the production MariaDB model.
  *
- * Mirrors the production MariaDB model with SQLite-compatible types:
- * - DECIMAL(18,6) -> REAL (SQLite has no fixed-point; JS number is fine for prototype)
- * - TIMESTAMP     -> INTEGER (unix epoch, mode: 'timestamp')
+ * Type mapping:
+ * - DECIMAL(18,6) -> doublePrecision (JS number end to end)
+ * - TIMESTAMP     -> timestamptz
  * - ENUM          -> TEXT with CHECK-like validation in the service layer
- * - JSON          -> TEXT (mode: 'json')
+ * - JSON          -> jsonb
  * - CHAR(44)      -> TEXT (length enforced in the service layer)
  */
 
 import { sql, relations } from 'drizzle-orm';
 import {
-  sqliteTable,
+  pgTable,
   text,
   integer,
-  real,
+  serial,
+  boolean,
+  timestamp,
+  doublePrecision,
+  jsonb,
   index,
   uniqueIndex,
-} from 'drizzle-orm/sqlite-core';
+} from 'drizzle-orm/pg-core';
 
 // ============================================================================
 // USERS
 // ============================================================================
 
-export const users = sqliteTable(
+export const users = pgTable(
   'users',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
 
     // Solana identity
     publicKey: text('public_key').notNull(),
@@ -45,19 +49,19 @@ export const users = sqliteTable(
     language: text('language').default('en').notNull(),
 
     // Balances
-    balanceUsdc: real('balance_usdc').default(0).notNull(),
-    balanceSol: real('balance_sol').default(0).notNull(),
+    balanceUsdc: doublePrecision('balance_usdc').default(0).notNull(),
+    balanceSol: doublePrecision('balance_sol').default(0).notNull(),
 
     // Lifecycle
-    isActive: integer('is_active', { mode: 'boolean' }).default(true).notNull(),
+    isActive: boolean('is_active').default(true).notNull(),
     kycStatus: text('kyc_status').default('none').notNull(), // none | pending | verified | rejected
-    lastLoginAt: integer('last_login_at', { mode: 'timestamp' }),
+    lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
 
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
   },
   (table) => [
@@ -72,10 +76,10 @@ export const users = sqliteTable(
 // CONTACTS
 // ============================================================================
 
-export const contacts = sqliteTable(
+export const contacts = pgTable(
   'contacts',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     userId: integer('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -89,15 +93,15 @@ export const contacts = sqliteTable(
     avatarBg: text('avatar_bg'),
     avatarEmoji: text('avatar_emoji').default('◡̈'),
 
-    isFavorite: integer('is_favorite', { mode: 'boolean' }).default(false).notNull(),
-    isVerified: integer('is_verified', { mode: 'boolean' }).default(false).notNull(),
+    isFavorite: boolean('is_favorite').default(false).notNull(),
+    isVerified: boolean('is_verified').default(false).notNull(),
     notes: text('notes'),
 
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
   },
   (table) => [
@@ -111,10 +115,10 @@ export const contacts = sqliteTable(
 // PAYMENT LINKS
 // ============================================================================
 
-export const paymentLinks = sqliteTable(
+export const paymentLinks = pgTable(
   'payment_links',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     userId: integer('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -122,7 +126,7 @@ export const paymentLinks = sqliteTable(
     slug: text('slug').notNull(),
     referencePubkey: text('reference_pubkey').notNull(),
 
-    amountUsdc: real('amount_usdc'), // null = open amount
+    amountUsdc: doublePrecision('amount_usdc'), // null = open amount
     currency: text('currency').default('USDC').notNull(),
 
     concept: text('concept').notNull(),
@@ -131,19 +135,19 @@ export const paymentLinks = sqliteTable(
     clientPhone: text('client_phone'),
 
     status: text('status').default('active').notNull(), // active | paid | partial | expired | cancelled
-    paidAmountUsdc: real('paid_amount_usdc').default(0).notNull(),
-    paidAt: integer('paid_at', { mode: 'timestamp' }),
+    paidAmountUsdc: doublePrecision('paid_amount_usdc').default(0).notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true }),
     paidByPubkey: text('paid_by_pubkey'),
     paidTxId: integer('paid_tx_id'),
 
-    expiresAt: integer('expires_at', { mode: 'timestamp' }),
-    metadataJson: text('metadata_json', { mode: 'json' }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    metadataJson: jsonb('metadata_json'),
 
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
   },
   (table) => [
@@ -158,10 +162,10 @@ export const paymentLinks = sqliteTable(
 // TRANSACTIONS
 // ============================================================================
 
-export const transactions = sqliteTable(
+export const transactions = pgTable(
   'transactions',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     userId: integer('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -169,12 +173,12 @@ export const transactions = sqliteTable(
     type: text('type').notNull(), // deposit | withdrawal | sent | received
     status: text('status').default('pending').notNull(), // pending | confirming | completed | failed | cancelled | expired
 
-    amountUsdc: real('amount_usdc').notNull(),
-    amountSol: real('amount_sol'),
+    amountUsdc: doublePrecision('amount_usdc').notNull(),
+    amountSol: doublePrecision('amount_sol'),
 
-    fiatAmount: real('fiat_amount'),
+    fiatAmount: doublePrecision('fiat_amount'),
     fiatCurrency: text('fiat_currency'),
-    fiatRate: real('fiat_rate'),
+    fiatRate: doublePrecision('fiat_rate'),
 
     counterpartyId: integer('counterparty_id').references(() => users.id, {
       onDelete: 'set null',
@@ -198,20 +202,20 @@ export const transactions = sqliteTable(
     memo: text('memo'),
     note: text('note'),
 
-    feeUsdc: real('fee_usdc').default(0).notNull(),
+    feeUsdc: doublePrecision('fee_usdc').default(0).notNull(),
     feePayer: text('fee_payer').default('protocol').notNull(),
 
     confirmations: integer('confirmations').default(0).notNull(),
-    confirmedAt: integer('confirmed_at', { mode: 'timestamp' }),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
     failedReason: text('failed_reason'),
 
-    metadataJson: text('metadata_json', { mode: 'json' }),
+    metadataJson: jsonb('metadata_json'),
 
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
   },
   (table) => [
@@ -232,10 +236,10 @@ export const transactions = sqliteTable(
 // QR SCANS
 // ============================================================================
 
-export const qrScans = sqliteTable(
+export const qrScans = pgTable(
   'qr_scans',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     userId: integer('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -244,7 +248,7 @@ export const qrScans = sqliteTable(
       onDelete: 'set null',
     }),
 
-    scannedAmountUsdc: real('scanned_amount_usdc'),
+    scannedAmountUsdc: doublePrecision('scanned_amount_usdc'),
     scannedConcept: text('scanned_concept'),
     scannedLabel: text('scanned_label'),
     scannedMessage: text('scanned_message'),
@@ -254,10 +258,10 @@ export const qrScans = sqliteTable(
       onDelete: 'set null',
     }),
 
-    scannedAt: integer('scanned_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    scannedAt: timestamp('scanned_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
-    completedAt: integer('completed_at', { mode: 'timestamp' }),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
   },
   (table) => [
     index('idx_qr_user_scanned').on(table.userId, table.scannedAt),
@@ -269,26 +273,26 @@ export const qrScans = sqliteTable(
 // USER SETTINGS (1:1)
 // ============================================================================
 
-export const userSettings = sqliteTable('user_settings', {
+export const userSettings = pgTable('user_settings', {
   userId: integer('user_id')
     .primaryKey()
     .references(() => users.id, { onDelete: 'cascade' }),
 
   language: text('language').default('en').notNull(),
   currency: text('currency').default('USD').notNull(),
-  hideBalance: integer('hide_balance', { mode: 'boolean' }).default(false).notNull(),
-  notificationsPush: integer('notifications_push', { mode: 'boolean' }).default(true).notNull(),
-  notificationsEmail: integer('notifications_email', { mode: 'boolean' }).default(false).notNull(),
+  hideBalance: boolean('hide_balance').default(false).notNull(),
+  notificationsPush: boolean('notifications_push').default(true).notNull(),
+  notificationsEmail: boolean('notifications_email').default(false).notNull(),
   securityPinHash: text('security_pin_hash'),
-  securityBiometric: integer('security_biometric', { mode: 'boolean' }).default(false).notNull(),
+  securityBiometric: boolean('security_biometric').default(false).notNull(),
   autoLockMinutes: integer('auto_lock_minutes').default(5).notNull(),
   theme: text('theme').default('dark').notNull(), // dark | light | system
 
-  createdAt: integer('created_at', { mode: 'timestamp' })
-    .default(sql`(unixepoch())`)
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
-  updatedAt: integer('updated_at', { mode: 'timestamp' })
-    .default(sql`(unixepoch())`)
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .default(sql`now()`)
     .notNull(),
 });
 
@@ -296,18 +300,18 @@ export const userSettings = sqliteTable('user_settings', {
 // FIAT RATES
 // ============================================================================
 
-export const fiatRates = sqliteTable(
+export const fiatRates = pgTable(
   'fiat_rates',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     baseCurrency: text('base_currency').default('USDC').notNull(),
     quoteCurrency: text('quote_currency').notNull(),
-    rate: real('rate').notNull(),
+    rate: doublePrecision('rate').notNull(),
     source: text('source').default('coingecko').notNull(),
-    validFrom: integer('valid_from', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    validFrom: timestamp('valid_from', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
-    validUntil: integer('valid_until', { mode: 'timestamp' }),
+    validUntil: timestamp('valid_until', { withTimezone: true }),
   },
   (table) => [index('idx_rate_lookup').on(table.quoteCurrency, table.validFrom)]
 );
@@ -316,10 +320,10 @@ export const fiatRates = sqliteTable(
 // NOTIFICATIONS
 // ============================================================================
 
-export const notifications = sqliteTable(
+export const notifications = pgTable(
   'notifications',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     userId: integer('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
@@ -335,12 +339,12 @@ export const notifications = sqliteTable(
       onDelete: 'set null',
     }),
 
-    isRead: integer('is_read', { mode: 'boolean' }).default(false).notNull(),
-    readAt: integer('read_at', { mode: 'timestamp' }),
-    dataJson: text('data_json', { mode: 'json' }),
+    isRead: boolean('is_read').default(false).notNull(),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    dataJson: jsonb('data_json'),
 
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
   },
   (table) => [
@@ -363,10 +367,10 @@ export const notifications = sqliteTable(
  * redelivery handling — `event_id` is shared by every message of one event, so
  * it cannot be used as the dedupe key.
  */
-export const webhookEvents = sqliteTable(
+export const webhookEvents = pgTable(
   'webhook_events',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
 
     messageId: text('message_id').notNull(),
     eventId: text('event_id'),
@@ -377,14 +381,14 @@ export const webhookEvents = sqliteTable(
     dynamicUserId: text('dynamic_user_id'),
     transactionHash: text('transaction_hash'),
 
-    isRedelivery: integer('is_redelivery', { mode: 'boolean' }).default(false).notNull(),
+    isRedelivery: boolean('is_redelivery').default(false).notNull(),
     /** Exact bytes of the request body, kept for signature verification and audit. */
     rawJson: text('raw_json'),
 
-    receivedAt: integer('received_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    receivedAt: timestamp('received_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
-    processedAt: integer('processed_at', { mode: 'timestamp' }),
+    processedAt: timestamp('processed_at', { withTimezone: true }),
     processError: text('process_error'),
   },
   (table) => [
@@ -399,20 +403,20 @@ export const webhookEvents = sqliteTable(
 // AUDIT LOG
 // ============================================================================
 
-export const auditLog = sqliteTable(
+export const auditLog = pgTable(
   'audit_log',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     tableName: text('table_name').notNull(),
     recordId: integer('record_id').notNull(),
     action: text('action').notNull(), // INSERT | UPDATE | DELETE
-    oldValues: text('old_values', { mode: 'json' }),
-    newValues: text('new_values', { mode: 'json' }),
+    oldValues: jsonb('old_values'),
+    newValues: jsonb('new_values'),
     userId: integer('user_id'),
     ipAddress: text('ip_address'),
     userAgent: text('user_agent'),
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .default(sql`(unixepoch())`)
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .default(sql`now()`)
       .notNull(),
   },
   (table) => [
@@ -420,6 +424,66 @@ export const auditLog = sqliteTable(
     index('idx_audit_user_time').on(table.userId, table.createdAt),
   ]
 );
+
+// ============================================================================
+// DYNAMIC METRICS (landing topline cache)
+// ============================================================================
+
+/**
+ * Single-row cache of the environment topline analytics served to the
+ * landing page (`GET /api/landing/metrics`).
+ *
+ * The landing is static (Cloudflare Pages), so it must never call Dynamic
+ * directly: an API token would end up in the browser. The server fetches
+ * `GET /environments/:environmentId/analytics/topline` with the token, keeps
+ * the snapshot here, and serves it until the cache TTL expires — the landing
+ * then animates the real numbers instead of placeholders.
+ */
+export const dynamicMetrics = pgTable('dynamic_metrics', {
+  /** Pinned single row (always 1): one environment, one shared snapshot. */
+  id: integer('id').primaryKey(),
+  environmentId: text('environment_id').notNull(),
+
+  users: integer('users').default(0).notNull(),
+  wallets: integer('wallets').default(0).notNull(),
+  sessions: integer('sessions').default(0).notNull(),
+
+  /** Last successful pull from the Dynamic API; null until the first fetch. */
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }),
+
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .default(sql`now()`)
+    .notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .default(sql`now()`)
+    .notNull(),
+});
+
+// ============================================================================
+// LANDING SURVEY (opiniones del formulario de contacto)
+// ============================================================================
+
+/**
+ * One row per submitted survey on the landing's "Opinion" section. The answer
+ * keys mirror the option values in landing/index.html (q1..q4); q2 is a JSON
+ * array because it accepts multiple selections. q4 is optional (nullable).
+ */
+export const landingSurveyResponses = pgTable('landing_survey_responses', {
+  id: serial('id').primaryKey(),
+
+  name: text('name').notNull(),
+  lastName: text('last_name').notNull(),
+  email: text('email').notNull(),
+
+  q1: text('q1').notNull(), // ahorrar | remesas
+  q2: text('q2').notNull(), // JSON array: efectivo | banco | apps | exchanges | sin_dolares
+  q3: text('q3').notNull(), // miedo_claves | redes_gas | comisiones | no_necesito
+  q4: text('q4'), // lt_50 | 50_200 | 200_1000 | gt_1000 (opcional)
+
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .default(sql`now()`)
+    .notNull(),
+});
 
 // ============================================================================
 // RELATIONS (for relational queries)
@@ -527,3 +591,6 @@ export type NewWebhookEvent = typeof webhookEvents.$inferInsert;
 
 export type AuditLogEntry = typeof auditLog.$inferSelect;
 export type NewAuditLogEntry = typeof auditLog.$inferInsert;
+
+export type DynamicMetrics = typeof dynamicMetrics.$inferSelect;
+export type NewDynamicMetrics = typeof dynamicMetrics.$inferInsert;

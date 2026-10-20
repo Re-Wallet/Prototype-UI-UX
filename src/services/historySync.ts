@@ -5,7 +5,7 @@
  * load fans out into one `getSignaturesForAddress` per owned token account plus
  * one `getTransaction` per signature, and that burst trips 429s on the shared
  * devnet endpoint. Instead the chain is read once, normalized, and persisted;
- * the UI reads SQLite.
+ * the UI reads the local database (Neon Postgres).
  *
  * The same `syncWalletHistory` serves three callers:
  *   - the one-off backfill for activity that predates the webhook,
@@ -23,6 +23,7 @@ import { users as usersTable } from '../db/schema';
 import type { Transaction as UiTransaction } from '../types/wallet';
 
 import { getWalletTransactions } from './solanaHistory';
+import { noteRateLimit } from './rpcThrottle';
 import { upsertTransactions, type PersistedMovement } from './wallet';
 
 export interface SyncResult {
@@ -85,6 +86,7 @@ function toPersistedMovement(
       title: movement.title,
       walletAddress: publicKey,
       source: 'solana-history',
+      ...(movement.feeLamports ? { feeLamports: movement.feeLamports } : {}),
     },
     createdAt: movement.date,
   };
@@ -103,7 +105,7 @@ export async function syncWalletHistory(
     .map((movement) => toPersistedMovement(movement, publicKey))
     .filter((movement): movement is PersistedMovement => movement !== null);
 
-  const { inserted, updated } = await upsertTransactions(userId, persisted);
+  const { inserted, updated } = await upsertTransactions(userId, persisted, publicKey);
 
   return { userId, publicKey, movements: movements.length, inserted, updated };
 }
@@ -148,6 +150,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** True when an error looks like endpoint rate limiting rather than a transient fault. */
+function isRateLimitError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /\b429\b/.test(message) || /too many requests|rate limit/i.test(message);
+}
+
 function isRetryable(error: unknown): boolean {
   const message = errorMessage(error);
   return (
@@ -175,6 +183,8 @@ async function withRetry<T>(label: string, operation: () => Promise<T>): Promise
       const isLastAttempt = attempt === RETRY_ATTEMPTS - 1;
       if (!isRetryable(error) || isLastAttempt) throw error;
 
+      if (isRateLimitError(error)) noteRateLimit();
+
       const delay = backoffDelay(attempt);
       console.warn(
         `[historySync] ${label}: reintento ${attempt + 1}/${RETRY_ATTEMPTS - 1} en ${delay}ms → ${errorMessage(error)}`
@@ -191,19 +201,28 @@ async function withRetry<T>(label: string, operation: () => Promise<T>): Promise
  *
  * Serial on purpose: the RPC rate limit is per endpoint, so parallel wallets
  * would recreate the 429 burst this ingestion is meant to eliminate.
+ *
+ * Returns the per-wallet results plus whether the run saw rate limiting, so the
+ * sweeper can lengthen its own cadence instead of hammering a tripped endpoint
+ * again after the fixed interval.
  */
-export async function syncAllWallets(delayMs = 3000): Promise<SyncResult[]> {
+export async function syncAllWallets(delayMs = 3000): Promise<{
+  results: SyncResult[];
+  rateLimited: boolean;
+}> {
   const wallets = await db
     .select({ id: usersTable.id, publicKey: usersTable.publicKey, handle: usersTable.handle })
     .from(usersTable)
     .orderBy(usersTable.id);
 
   const results: SyncResult[] = [];
+  let rateLimited = false;
 
   for (const wallet of wallets) {
     try {
       results.push(await syncWalletHistory(wallet.id, wallet.publicKey));
     } catch (error) {
+      if (isRateLimitError(error)) rateLimited = true;
       results.push({
         userId: wallet.id,
         publicKey: wallet.publicKey,
@@ -217,5 +236,5 @@ export async function syncAllWallets(delayMs = 3000): Promise<SyncResult[]> {
     if (delayMs > 0) await sleep(delayMs);
   }
 
-  return results;
+  return { results, rateLimited };
 }

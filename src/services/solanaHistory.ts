@@ -1,14 +1,15 @@
 import { assetBySymbol, chain, rpc, type Address } from '../adapters';
 import type { Transaction } from '../types/wallet';
 
+import { currentRpcPaceMs } from './rpcThrottle';
+
 const SIGNATURE_PAGE_SIZE = 50;
 const SIGNATURE_PAGES = 2;
 // The public devnet endpoint answers ~10 heavy getTransaction calls per short
-// window, then 429s the caller (verified empirically). One call every ~400ms
-// stays under the limit; a full two-wallet backfill is ~15s, which is fine
-// for a background job.
+// window, then 429s the caller (verified empirically). Pacing adapts to the
+// observed pressure via `currentRpcPaceMs`: ~400ms while the endpoint is
+// healthy, widening automatically once it has tripped (see rpcThrottle).
 const TRANSACTION_BATCH_SIZE = 1;
-const RPC_PACE_MS = 400;
 const USDC_MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
 
 function sleep(ms: number): Promise<void> {
@@ -154,6 +155,10 @@ export function parseWalletTransaction(
   const balanceIndex = ownerIndex >= 0 ? ownerIndex : ataIndex;
   const preLamports = asBigInt(preBalances[balanceIndex]);
   const postLamports = asBigInt(postBalances[balanceIndex]);
+  // The network fee is paid by the fee payer (account key 0). Surfaced on every
+  // movement of the tx so the receipt can show it — same shape the webhook
+  // writes (`metadataJson.feeLamports`), so the two sources stay consistent.
+  const feeLamports = keys[0] === owner ? Number(asBigInt(meta.fee) ?? 0n) : 0;
   if (preLamports !== null && postLamports !== null) {
     const fee = keys[0] === owner ? asBigInt(meta.fee) ?? 0n : 0n;
     const delta = postLamports - preLamports + fee;
@@ -180,6 +185,7 @@ export function parseWalletTransaction(
         referenceId: signature,
         txHash: signature,
         walletAddress: owner,
+        ...(feeLamports > 0 ? { feeLamports } : {}),
       });
     }
   }
@@ -205,6 +211,7 @@ export function parseWalletTransaction(
       referenceId: signature,
       txHash: signature,
       walletAddress: owner,
+      ...(feeLamports > 0 ? { feeLamports } : {}),
     });
   }
 
@@ -250,7 +257,7 @@ export async function getWalletTransactions(owner: Address): Promise<Transaction
   ];
   const signatureSets: SignatureInfo[][] = [];
   for (const [index, address] of signatureAddresses.entries()) {
-    if (index > 0) await sleep(RPC_PACE_MS);
+    if (index > 0) await sleep(currentRpcPaceMs());
     signatureSets.push(await getAddressSignatures(address));
   }
   const signatures = new Map<string, SignatureInfo>();
@@ -262,7 +269,7 @@ export async function getWalletTransactions(owner: Address): Promise<Transaction
 
   const history: Transaction[] = [];
   for (let index = 0; index < orderedSignatures.length; index += TRANSACTION_BATCH_SIZE) {
-    if (index > 0) await sleep(RPC_PACE_MS);
+    if (index > 0) await sleep(currentRpcPaceMs());
     const batch = orderedSignatures.slice(index, index + TRANSACTION_BATCH_SIZE);
     const parsedTransactions = await Promise.all(batch.map(async (entry) => {
       const response = await rpc().getTransaction(entry.signature as never, {
