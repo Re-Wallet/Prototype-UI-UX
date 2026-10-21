@@ -260,6 +260,27 @@ function WalletApp() {
     }
   }, [solanaWallet?.address]);
 
+  /**
+   * Which live subscriptions are actually working.
+   *
+   * The push channel can be unreachable — a network that cannot reach the
+   * Realtime socket, a proxy that refuses WebSockets, a capability that
+   * expired. The app cannot fix that, but it can notice it: the poll
+   * tightens when the push is not there, so the UI never goes stale just
+   * because a socket could not be opened.
+   */
+  const [liveBridges, setLiveBridges] = useState<ReadonlySet<string>>(new Set());
+  const handleRealtimeStatus = useCallback((bridge: string, live: boolean) => {
+    setLiveBridges((current) => {
+      if (live === current.has(bridge)) return current;
+      const next = new Set(current);
+      if (live) next.add(bridge);
+      else next.delete(bridge);
+      return next;
+    });
+  }, []);
+  const isRealtimeLive = liveBridges.size > 0;
+
   // The charges this account is waiting to collect. They are links, not
   // movements: no money moved yet, so they live in the activity list as
   // pending rows and never touch the balance.
@@ -389,12 +410,14 @@ function WalletApp() {
       void refreshTransactions(true);
       void refreshNotifications();
     };
-    // Realtime pushes the movements and the charges; the poll is the floor
-    // under them, not the way the UI learns about a change. Sixty seconds is
-    // enough to notice what a broken subscription would hide.
+    // Realtime pushes the movements and the charges, so the poll is the floor
+    // under them, not the way the UI learns about a change. When the push is
+    // not working, the poll becomes the only way to hear about one — and it
+    // tightens back to ten seconds instead of leaving the screen stale.
+    const pollMs = isRealtimeLive ? 60_000 : 10_000;
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') tick();
-    }, 60_000);
+    }, pollMs);
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') tick();
@@ -405,7 +428,7 @@ function WalletApp() {
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [refreshTransactions, refreshNotifications]);
+  }, [refreshTransactions, refreshNotifications, isRealtimeLive]);
   // Navigation and active flows (Navbar has only: home, transfer, activity)
   const [activeTab, setActiveTab] = useState<NavTab>('home');
   const [activeFlow, setActiveFlow] = useState<
@@ -706,6 +729,7 @@ function WalletApp() {
             <LiveTransactionsBridge
               walletAddress={solanaWallet.address as string}
               onRows={handleLiveTransactions}
+              onStatus={(live) => handleRealtimeStatus('transactions', live)}
             />
           )}
 
@@ -715,6 +739,7 @@ function WalletApp() {
             <LivePaymentLinksBridge
               walletAddress={solanaWallet.address as string}
               onLinks={handleLiveLinks}
+              onStatus={(live) => handleRealtimeStatus('paymentLinks', live)}
             />
           )}
 

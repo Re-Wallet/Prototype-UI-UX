@@ -261,6 +261,20 @@ rolldown.
 Users must exist in the local `users` table (seeded) for the webhook to
 project their movements — see [Known limitations](#known-limitations).
 
+### Realtime and the network
+
+The push channel rides a **WebSocket to Neon's Realtime socket**, and that
+socket is reached over **IPv4 or IPv6**. A network that resolves the host to
+an IPv6 address it cannot route to will refuse the WebSocket
+(`NS_ERROR_WEBSOCKET_CONNECTION_REFUSED` in Firefox, which does not fall
+back to IPv4 for WebSockets the way Node and Chrome do).
+
+The app is built for that: the bridges report whether the subscription is
+actually `live`, and the poll **tightens to 10 seconds when the push is not
+working** and relaxes to 60 when it is. The UI stays responsive even where
+the socket is unreachable, and the browser console says which case it is
+(`connection_ready` / `subscription_live` versus `connection_lost`).
+
 ### Neon setup (required)
 
 The ledger runs on **Neon Postgres** and the UI learns about changes over

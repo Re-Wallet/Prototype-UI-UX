@@ -29,12 +29,26 @@ interface LiveSubscriptionProps {
   sealedQuery: SealedLiveQuery<LivePaymentLinkRow>;
   refreshQuery: () => Promise<SealedLiveQuery<LivePaymentLinkRow>>;
   onLinks: (links: PaymentLinkDto[]) => void;
+  /** Reports whether the push channel is actually working. */
+  onStatus?: (live: boolean) => void;
 }
 
-function LiveSubscription({ sealedQuery, refreshQuery, onLinks }: LiveSubscriptionProps) {
+function LiveSubscription({ sealedQuery, refreshQuery, onLinks, onStatus }: LiveSubscriptionProps) {
   // `data` is the complete authoritative row set after each atomic batch —
   // replace semantics upstream, not a delta.
-  const { data } = useLiveQuery(sealedQuery, { refreshQuery });
+  const { data, status } = useLiveQuery(sealedQuery, { refreshQuery });
+
+  /**
+   * Whether the push channel is actually working.
+   *
+   * A subscription can be born dead — a network that cannot reach the
+   * Realtime socket, a capability that expired, a proxy that refuses
+   * WebSockets. The app has to know, because the poll is what covers the
+   * gap when the push is not there.
+   */
+  useEffect(() => {
+    onStatus?.(status === 'live');
+  }, [status, onStatus]);
 
   useEffect(() => {
     if (!data) return;
@@ -47,9 +61,11 @@ function LiveSubscription({ sealedQuery, refreshQuery, onLinks }: LiveSubscripti
 export interface LivePaymentLinksBridgeProps {
   walletAddress: string;
   onLinks: (links: PaymentLinkDto[]) => void;
+  /** Reports whether the push channel is actually working. */
+  onStatus?: (live: boolean) => void;
 }
 
-export function LivePaymentLinksBridge({ walletAddress, onLinks }: LivePaymentLinksBridgeProps) {
+export function LivePaymentLinksBridge({ walletAddress, onLinks, onStatus }: LivePaymentLinksBridgeProps) {
   const [sealedQuery, setSealedQuery] = useState<
     SealedLiveQuery<LivePaymentLinkRow> | null
   >(null);
@@ -80,5 +96,12 @@ export function LivePaymentLinksBridge({ walletAddress, onLinks }: LivePaymentLi
   );
 
   if (!sealedQuery) return null;
-  return <LiveSubscription sealedQuery={sealedQuery} refreshQuery={refreshQuery} onLinks={onLinks} />;
+  return (
+    <LiveSubscription
+      sealedQuery={sealedQuery}
+      refreshQuery={refreshQuery}
+      onLinks={onLinks}
+      onStatus={onStatus}
+    />
+  );
 }
