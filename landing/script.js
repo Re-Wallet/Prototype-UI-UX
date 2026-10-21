@@ -10,11 +10,20 @@
 const IS_LOCAL =
   window.location.hostname === "localhost" ||
   window.location.hostname === "127.0.0.1";
+/* La URL de la app sale del <meta name="re-wallet-app-url"> del HTML: es el
+   único punto que hay que tocar al desplegar la landing. El placeholder
+   cuenta como "sin configurar", y en ese caso el botón de demo se
+   deshabilita en vez de llevar a una URL rota. */
+const CONFIGURED_APP_URL = (
+  document.querySelector('meta[name="re-wallet-app-url"]')?.content ?? ""
+).trim();
 const APP_URL = IS_LOCAL
   ? "http://127.0.0.1:3000"
-  : "https://TODO-reemplazar-por-el-worker";
+  : CONFIGURED_APP_URL && !CONFIGURED_APP_URL.startsWith("TU-")
+    ? CONFIGURED_APP_URL
+    : "";
 /* API — en dev es el server Express (:3001); en prod, el mismo worker. */
-const API_URL = IS_LOCAL ? "http://127.0.0.1:3001" : APP_URL;
+const API_URL = IS_LOCAL ? "http://127.0.0.1:3001" : APP_URL || window.location.origin;
 
 /* ---------------------------------------------------------------------------
    MÉTRICAS — valores reales vía GET /api/landing/metrics.
@@ -46,9 +55,15 @@ const metricsReady = fetch(`${API_URL}/api/landing/metrics`)
 const demoBtn = document.querySelector(".demo-btn");
 
 /* DEMO DEVNET - navega a la app (worker en prod, Vite en dev local) */
-demoBtn.addEventListener("click", () => {
-  window.location.href = APP_URL;
-});
+if (APP_URL) {
+  demoBtn.addEventListener("click", () => {
+    window.location.href = APP_URL;
+  });
+} else {
+  demoBtn.disabled = true;
+  demoBtn.title = "Configurá la URL de la app en el meta re-wallet-app-url";
+  demoBtn.classList.add("is-disabled");
+}
 
 /* HEADLINE ROTATOR — "cualquier persona" ↔ "cualquier negocio" */
 const headlineRotate = document.getElementById("headlineRotate");
@@ -138,144 +153,11 @@ const sectionObserver = new IntersectionObserver(
 document.querySelectorAll("[data-label]").forEach((section) => {
   sectionObserver.observe(section);
 });
+/* ---------------------------------------------------------------------------
+   ENCUESTA — DESCONECTADA.
 
-/* OPINION WIZARD — validación paso a paso + envío al API + progreso. */
-const opinionForm = document.getElementById("opinionForm");
-const opinionStatus = document.getElementById("opinionStatus");
-const opinionSuccess = document.getElementById("opinionSuccess");
-const surveyProgress = document.getElementById("surveyProgress");
-const surveyProgressLabel = document.getElementById("surveyProgressLabel");
-
-const wizardSteps = opinionForm.querySelectorAll(".wizard-step");
-const TOTAL_STEPS = wizardSteps.length;
-let currentStep = 1;
-
-const STEP_NAMES = [
-  "Nombre y apellido",
-  "Pregunta 1",
-  "Pregunta 2",
-  "Pregunta 3",
-  "Pregunta 4",
-];
-
-const selectedRadio = (name) =>
-  opinionForm.querySelector(`input[name="${name}"]:checked`)?.value ?? "";
-
-function validateStep(step) {
-  if (step === 1) {
-    const name = document.getElementById("opinionName").value.trim();
-    const lastName = document.getElementById("opinionLastName").value.trim();
-    const email = document.getElementById("opinionEmail").value.trim();
-    if (!name || !lastName) return "Completá tu nombre y apellido.";
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Revisá el formato del email.";
-    return null;
-  }
-  if (step === 2 && !selectedRadio("q1")) return "Elegí una opción.";
-  if (step === 3 && opinionForm.querySelectorAll('input[name="q2"]:checked').length === 0)
-    return "Elegí al menos una opción.";
-  if (step === 4 && !selectedRadio("q3")) return "Elegí una opción.";
-  return null;
-}
-
-function updateProgress() {
-  const steps = [
-    Boolean(
-      document.getElementById("opinionName").value.trim() &&
-      document.getElementById("opinionLastName").value.trim() &&
-      document.getElementById("opinionEmail").value.trim(),
-    ),
-    Boolean(selectedRadio("q1")),
-    opinionForm.querySelectorAll('input[name="q2"]:checked').length > 0,
-    Boolean(selectedRadio("q3")),
-    Boolean(selectedRadio("q4")),
-  ];
-
-  surveyProgress.querySelectorAll(".step").forEach((el, i) => {
-    el.classList.toggle("is-done", steps[i]);
-    el.classList.toggle("is-current", i + 1 === currentStep);
-  });
-
-  surveyProgressLabel.textContent =
-    currentStep === TOTAL_STEPS && steps.every(Boolean)
-      ? "Listo para enviar"
-      : `Paso ${currentStep} de ${TOTAL_STEPS}: ${STEP_NAMES[currentStep - 1]}`;
-}
-
-function goToStep(n) {
-  wizardSteps.forEach((el) => el.classList.remove("is-active"));
-  wizardSteps[n - 1].classList.add("is-active");
-  currentStep = n;
-  updateProgress();
-  opinionForm.querySelector(`.wizard-step[data-step="${n}"]`).scrollIntoView({
-    behavior: prefersReducedMotion.matches ? "auto" : "smooth",
-    block: "start",
-  });
-}
-
-opinionForm.addEventListener("click", (event) => {
-  const nextBtn = event.target.closest(".wizard-next");
-  const backBtn = event.target.closest(".wizard-back");
-
-  if (nextBtn) {
-    const error = validateStep(currentStep);
-    if (error) {
-      opinionStatus.textContent = error;
-      opinionStatus.classList.add("is-error");
-      return;
-    }
-    opinionStatus.classList.remove("is-error");
-    opinionStatus.textContent = "";
-    goToStep(currentStep + 1);
-  }
-
-  if (backBtn) {
-    goToStep(currentStep - 1);
-  }
-});
-
-opinionForm.addEventListener("input", updateProgress);
-opinionForm.addEventListener("change", updateProgress);
-
-opinionForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  const name = document.getElementById("opinionName").value.trim();
-  const lastName = document.getElementById("opinionLastName").value.trim();
-  const email = document.getElementById("opinionEmail").value.trim();
-
-  const answers = {
-    q1: selectedRadio("q1"),
-    q2: [...opinionForm.querySelectorAll('input[name="q2"]:checked')].map(
-      (input) => input.value,
-    ),
-    q3: selectedRadio("q3"),
-    q4: selectedRadio("q4"),
-  };
-
-  opinionStatus.classList.remove("is-error");
-  opinionStatus.textContent = "";
-
-  try {
-    const response = await fetch(`${API_URL}/api/landing/survey`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, lastName, email, ...answers }),
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  } catch {
-    opinionStatus.textContent = "No se pudo guardar tu respuesta. Intentá de nuevo.";
-    opinionStatus.classList.add("is-error");
-    return;
-  }
-
-  opinionForm.hidden = true;
-  opinionSuccess.hidden = false;
-  opinionSuccess.scrollIntoView({
-    behavior: prefersReducedMotion.matches ? "auto" : "smooth",
-    block: "center",
-  });
-});
-
-document.getElementById("successDemoBtn").addEventListener("click", () => {
-  window.location.href = APP_URL;
-});
+   El formulario de opinión vivía acá y posteaba a POST /api/landing/survey.
+   Ahora la encuesta vive dentro de la app (la tarjeta del home), que es
+   donde el usuario ya está identificado. Esta landing queda con la llamada
+   a la acción de partner.
+--------------------------------------------------------------------------- */

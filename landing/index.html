@@ -15,6 +15,14 @@
       property="og:description"
       content="Billetera digital para cobros, pagos, depósitos y retiros instantáneos sin comisiones en dólares digitales (USDC)."
     >
+    <!--
+      URL de la app (el worker que sirve el SPA + API).
+      Es el ÚNICO punto que hay que cambiar al desplegar la landing:
+      el botón "Demo Devnet" y el CTA de la app apuntan acá.
+      Si queda vacío, el botón de demo se deshabilita en vez de llevar
+      a un placeholder roto.
+    -->
+    <meta name="re-wallet-app-url" content="https://TU-APP-URL">
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary_large_image">
   </head>
@@ -31,7 +39,7 @@
       <a href="#inicio">Inicio</a>
       <a href="#funciones">Funciones</a>
       <a href="#faq">FAQ</a>
-        <a href="#opinion">Opinion</a>
+        <a href="#partner">Partner</a>
     </nav>
 
     <div class="date-stamp">
@@ -59,8 +67,8 @@
           </p>
 
           <div class="email-input">
-            <a href="#opinion" class="primary-btn">
-              Cuentanos tu opinion
+            <a href="#partner" class="primary-btn">
+              Quiero ser partner
             </a>
           </div>
         </div>
@@ -247,178 +255,32 @@
       </div>
     </section>
 
-    <!-- OPINION -->
-    <section class="landing-section opinion-section" id="opinion" data-label="OPINION">
+    <!-- PARTNER -->
+    <section class="landing-section partner-section" id="partner" data-label="PARTNER">
       <header class="section-heading">
-        <span>03 / OPINION</span>
-        <h2>Contanos <span>sin rodeos</span></h2>
+        <span>03 / PARTNER</span>
+        <h2>Quiero ser <span>partner</span></h2>
         <p>
-          Cuatro preguntas cortas y listo: nos ayudás a entender mejor
-          a quién le servimos.
+          Si tenés un negocio, una flota o una comunidad, podemos cobrar y
+          pagar en dólares digitales, sin comisiones y en segundos. Reservá
+          media hora con el equipo y te mostramos cómo Re Wallet funciona
+          para vos.
         </p>
       </header>
 
-      <form class="opinion-form" id="opinionForm" novalidate>
-        <div class="survey-progress" id="surveyProgress">
-          <span class="step" data-step="1">1</span>
-          <span class="step" data-step="2">2</span>
-          <span class="step" data-step="3">3</span>
-          <span class="step" data-step="4">4</span>
-          <span class="step" data-step="5">5</span>
-        </div>
-        <p class="survey-progress-label" id="surveyProgressLabel">Paso 1 de 5: Nombre y apellido</p>
-
-        <!-- STEP 1: Identificación -->
-        <fieldset class="wizard-step is-active" data-step="1">
-          <div class="form-row">
-            <label class="form-field">
-              <span>NOMBRE</span>
-              <input type="text" id="opinionName" placeholder="Tu nombre" required>
-            </label>
-            <label class="form-field">
-              <span>APELLIDO</span>
-              <input type="text" id="opinionLastName" placeholder="Tu apellido" required>
-            </label>
-          </div>
-          <label class="form-field">
-            <span>EMAIL</span>
-            <input type="email" id="opinionEmail" placeholder="tu@email.com" required>
-          </label>
-          <div class="wizard-nav">
-            <button type="button" class="primary-btn wizard-next">CONTINUAR</button>
-          </div>
-        </fieldset>
-
-        <!-- STEP 2: Pregunta 1 -->
-        <fieldset class="survey-q wizard-step" data-step="2">
-          <legend><span class="q-num">1.</span> ¿Cuál es tu objetivo principal hoy?</legend>
-          <div class="survey-options">
-            <label class="survey-option">
-              <input type="radio" name="q1" value="ahorrar">
-              <span class="opt-key">A)</span>
-              <span>Ahorrar y protegerme de la inflación</span>
-            </label>
-            <label class="survey-option">
-              <input type="radio" name="q1" value="remesas">
-              <span class="opt-key">B)</span>
-              <span>Pagar o enviar dinero a familiares o amigos (remesas)</span>
-            </label>
-          </div>
-          <div class="wizard-nav">
-            <button type="button" class="wizard-back">ANTERIOR</button>
-            <button type="button" class="primary-btn wizard-next">CONTINUAR</button>
-          </div>
-        </fieldset>
-
-        <!-- STEP 3: Pregunta 2 -->
-        <fieldset class="survey-q wizard-step" data-step="3">
-          <legend><span class="q-num">2.</span> ¿Cómo manejás tus dólares hoy?</legend>
-          <div class="survey-options">
-            <label class="survey-option">
-              <input type="checkbox" name="q2" value="efectivo">
-              <span class="opt-key">A)</span>
-              <span>Efectivo (colchón o caja de seguridad)</span>
-            </label>
-            <label class="survey-option">
-              <input type="checkbox" name="q2" value="banco">
-              <span class="opt-key">B)</span>
-              <span>En el banco tradicional (caja de ahorro en dólares)</span>
-            </label>
-            <label class="survey-option">
-              <input type="checkbox" name="q2" value="apps">
-              <span class="opt-key">C)</span>
-              <span>En apps como Lemon, Belo, Ualá u otras</span>
-            </label>
-            <label class="survey-option">
-              <input type="checkbox" name="q2" value="exchanges">
-              <span class="opt-key">D)</span>
-              <span>En exchanges cripto (Binance, Ripio, etc.)</span>
-            </label>
-            <label class="survey-option">
-              <input type="checkbox" name="q2" value="sin_dolares">
-              <span class="opt-key">E)</span>
-              <span>No tengo dólares</span>
-            </label>
-          </div>
-          <div class="wizard-nav">
-            <button type="button" class="wizard-back">ANTERIOR</button>
-            <button type="button" class="primary-btn wizard-next">CONTINUAR</button>
-          </div>
-        </fieldset>
-
-        <!-- STEP 4: Pregunta 3 -->
-        <fieldset class="survey-q wizard-step" data-step="4">
-          <legend><span class="q-num">3.</span> ¿Qué es lo que más te frena de las wallets cripto actuales?</legend>
-          <div class="survey-options">
-            <label class="survey-option">
-              <input type="radio" name="q3" value="miedo_claves">
-              <span class="opt-key">A)</span>
-              <span>Me da miedo perder la clave o hacer clic mal</span>
-            </label>
-            <label class="survey-option">
-              <input type="radio" name="q3" value="redes_gas">
-              <span class="opt-key">B)</span>
-              <span>No entiendo de redes o gas</span>
-            </label>
-            <label class="survey-option">
-              <input type="radio" name="q3" value="comisiones">
-              <span class="opt-key">C)</span>
-              <span>Las comisiones son muy altas</span>
-            </label>
-            <label class="survey-option">
-              <input type="radio" name="q3" value="no_necesito">
-              <span class="opt-key">D)</span>
-              <span>No las necesito</span>
-            </label>
-          </div>
-          <div class="wizard-nav">
-            <button type="button" class="wizard-back">ANTERIOR</button>
-            <button type="button" class="primary-btn wizard-next">CONTINUAR</button>
-          </div>
-        </fieldset>
-
-        <!-- STEP 5: Pregunta 4 -->
-        <fieldset class="survey-q wizard-step" data-step="5">
-          <legend>
-            <span class="q-num">4.</span> ¿Cuánto pensás mover el primer mes?
-            <span class="q-optional">OPCIONAL</span>
-          </legend>
-          <div class="survey-options">
-            <label class="survey-option">
-              <input type="radio" name="q4" value="lt_50">
-              <span class="opt-key">A)</span>
-              <span>Menos de $50</span>
-            </label>
-            <label class="survey-option">
-              <input type="radio" name="q4" value="50_200">
-              <span class="opt-key">B)</span>
-              <span>$50 – $200</span>
-            </label>
-            <label class="survey-option">
-              <input type="radio" name="q4" value="200_1000">
-              <span class="opt-key">C)</span>
-              <span>$200 – $1000</span>
-            </label>
-            <label class="survey-option">
-              <input type="radio" name="q4" value="gt_1000">
-              <span class="opt-key">D)</span>
-              <span>Más de $1000</span>
-            </label>
-          </div>
-          <div class="wizard-nav">
-            <button type="button" class="wizard-back">ANTERIOR</button>
-            <button type="submit" class="primary-btn">ENVIAR MIS RESPUESTAS</button>
-          </div>
-        </fieldset>
-
-        <p class="form-status" id="opinionStatus" role="status" aria-live="polite"></p>
-      </form>
-
-      <div class="form-success" id="opinionSuccess" hidden>
-        <p>Gracias, tu aporte nos ayuda a crecer mucho.</p>
-        <button type="button" class="primary-btn" id="successDemoBtn">PROBAR DEMO EN DEVNET</button>
+      <div class="partner-cta">
+        <a
+          class="partner-btn"
+          href="https://calendar.app.google/oYTV6Y4Smzmaave26"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Reservar una reunión de cortesía
+        </a>
+        <p class="partner-note">Sin compromiso · 30 minutos · por videollamada</p>
       </div>
     </section>
+
   </main>
 
   <footer class="legal-footer">
