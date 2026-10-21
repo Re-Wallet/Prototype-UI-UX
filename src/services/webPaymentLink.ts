@@ -91,6 +91,9 @@ export function parseWebPaymentUrl(locationHref: string): WebPaymentIntent | nul
     mint: mint as Address,
     cluster,
     message,
-    reference: reference || undefined,
+    // Only present when the link carries one: a URL without a reference
+    // must parse back into an intent without the key, or the round trip
+    // is not symmetric.
+    ...(reference ? { reference } : {}),
   };
 }
