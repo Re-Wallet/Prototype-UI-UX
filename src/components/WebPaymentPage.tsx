@@ -242,7 +242,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
   const closePaymentPage = () => window.location.assign(resolveAppHomeUrl());
 
   return (
-    <div className="flex h-full flex-col px-6 py-6 text-white">
+    <div className="relative flex h-full flex-col px-6 py-6 text-white">
       {!intent || !asset ? (
         <div className="flex w-full flex-1 flex-col items-center justify-center text-center">
           <h1 className="mb-2 text-xl font-bold">Solicitud no válida</h1>
@@ -405,23 +405,19 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
                 )}
               </>
             ) : (
-              /* No session: the payer onboards right here. A disabled pay
-                 button with no way forward is a dead end — the request has to
-                 be payable from the link alone. */
-              <div className="w-full">
-                {initStatus !== 'finished' ? (
-                  <p className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    Conectando…
-                  </p>
-                ) : (
-                  <SignInScreen
-                    compact
-                    title="Necesitás una wallet para pagar"
-                    subtitle="Ingresá con tu email y creamos tu wallet Solana en segundos."
-                  />
-                )}
-              </div>
+              /* No session: the request stays whole behind the overlay, and
+                 the overlay is what asks the payer to sign in. */
+              <>
+                <button
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#ff5a1f] font-semibold text-white opacity-40"
+                  disabled
+                >
+                  Pagar {Number.isFinite(amount) ? amount.toFixed(2) : '0.00'} USDC
+                </button>
+                <p className="mt-4 text-center text-xs leading-5 text-zinc-400">
+                  Iniciá sesión para pagar esta solicitud.
+                </p>
+              </>
             )}
 
             {walletError && (
@@ -437,6 +433,30 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             <BackToHomeButton onClick={closePaymentPage} />
           </div>
         </>
+      )}
+
+      {/* The sign-in sits ON TOP of the request, not under it.
+
+          The request is the reason the user opened the link, so it stays
+          readable behind the overlay — and the overlay has no way out: the
+          payer cannot pay without a wallet, and a wallet needs an account. */}
+      {!sessionUser && intent && asset && !signature && !linkSettled && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-[#070709]/75 px-5 backdrop-blur-[2px] animate-in fade-in">
+          <div className="w-full max-w-sm rounded-3xl border border-white/10 bg-[#161619]/95 p-5 shadow-2xl">
+            {initStatus !== 'finished' ? (
+              <p className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
+                <Loader2 className="h-5 w-5 animate-spin" />
+                Conectando…
+              </p>
+            ) : (
+              <SignInScreen
+                compact
+                title="Necesitás una wallet para pagar"
+                subtitle="Ingresá con tu email y creamos tu wallet Solana en segundos."
+              />
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
