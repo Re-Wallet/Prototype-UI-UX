@@ -81,9 +81,9 @@ import sp as sp
 # Define a simple function to simulate a Vite development environment
 def simulate_vite_development():
     # Assume there is a main.js file that contains the following code
-    main_js_code = ''"
+    main_js_code = '''
     console.log('Hello, Vite!');
-    ''"
+    '''
 
     # When you make a change to main.js, Vite should update the browser
     # without a full page reload. Here, we simulate this behavior.
