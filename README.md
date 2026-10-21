@@ -615,6 +615,20 @@ product loop before infrastructure work. The path to the first beta users:
    body, so this is the `submitSurvey()` call plus the name/apellido
    decision (the account may not carry a last name, and the column is
    `NOT NULL` today).
+6. **The bell goes real-time** — the notifications feed has no live
+   subscription, so the 20-second poll is the only thing that updates it.
+   Refreshing the notifications when the transactions bridge sees new rows
+   closes the gap: the webhook that writes a notification always writes the
+   transaction too, so the same event drives both.
+7. **The poll becomes reconciliation** — with Realtime pushing the
+   movements and the charges, the 20-second poll is only the floor under
+   them. Drop it to 60s, and eventually let it sleep while the live
+   subscription reports itself as healthy (the SDK exposes
+   `connection_ready` / `subscription_live` / `queryUnavailable`).
+8. **A stable public origin** — the payment links carry the tunnel's
+   hostname, so a tunnel restart kills the links that were already shared.
+   A named tunnel with a fixed domain (or a real host) removes both that
+   and the manual re-registration of the Dynamic webhook.
 
 ## License
 
