@@ -50,7 +50,7 @@ import {
 } from './services/walletApi';
 import { WebPaymentPage } from './components/WebPaymentPage';
 import { RealtimeProvider } from '@neon/realtime-react';
-import { realtimeClient } from './services/realtimeClient';
+import { getRealtimeClient } from './services/realtimeClient';
 import { LiveTransactionsBridge } from './components/LiveTransactionsBridge';
 import { LivePaymentLinksBridge } from './components/LivePaymentLinksBridge';
 
@@ -100,6 +100,10 @@ export default function App() {
       <WalletApp />
     </DynamicAccountGate>
   );
+
+  // The Realtime client is created on first use, because its endpoint comes
+  // from the deployment and the bundle was built before it was known.
+  const realtimeClient = getRealtimeClient();
 
   // Realtime is optional (VITE_NEON_REALTIME_URL): without a client the app
   // keeps its REST + RPC transaction paths untouched.
@@ -798,7 +802,7 @@ function WalletApp() {
           <NotificationToast toast={toast} onDismiss={() => setToast(null)} />
 
           {/* Invisible: live DB → UI propagation over Neon Realtime */}
-          {solanaWallet && realtimeClient && (
+          {solanaWallet && getRealtimeClient() && (
             <LiveTransactionsBridge
               walletAddress={solanaWallet.address as string}
               onRows={handleLiveTransactions}
@@ -808,7 +812,7 @@ function WalletApp() {
 
           {/* The charges of this account, live. The webhook settles a link
               and this is what makes the pending row vanish in real time. */}
-          {solanaWallet && realtimeClient && (
+          {solanaWallet && getRealtimeClient() && (
             <LivePaymentLinksBridge
               walletAddress={solanaWallet.address as string}
               onLinks={handleLiveLinks}

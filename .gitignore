@@ -24,3 +24,9 @@ bun.lockb
 pnpm-lock.yaml
 yarn.lock
 .neon
+
+# The local Worker secrets. They are real credentials: never commit them.
+.dev.vars
+.dev.vars.*
+# Wrangler's local state: the dev bundle and the caches. Never commit it.
+.wrangler/

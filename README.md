@@ -805,10 +805,48 @@ server and check the flows the unit tests cannot reach:
 `npm test` (unit) + `npm run lint` (types) + the audit scripts (behaviour)
 are the three gates a change has to pass.
 
-### Deploying to Cloudflare
+### Deploying to Cloudflare Workers
 
-> **Not yet.** This is the Phase 3/4 runbook, written down before it is
-> built so the decisions are reviewable.
+The Worker exists: `src/worker.ts` serves the landing and the API from one
+deployment, and `wrangler.jsonc` holds the configuration. The Express app
+runs **unchanged** inside the Worker — `node:http` is natively supported and
+`handleAsNodeRequest` hands a Worker request to the Node server in the same
+isolate — so no route, no middleware and no handler was rewritten.
+
+What the Worker changed:
+
+| | Before | Now |
+|---|---|---|
+| The database | a `pg` pool over TCP | `drizzle-orm/neon-http`: one `fetch` per statement, no pool to warm |
+| The sweeper | a self-rescheduling timer | the Cron Trigger (`*/5 * * * *`) calling the same `runHistorySweep()` |
+| The landing | `express.static` on `dist/` | the assets binding, with the history fallback for a deep link |
+| The configuration | `VITE_*` baked into the bundle | `GET /api/config`, fetched before the app renders |
+
+```bash
+# 1. The build (the bundle) and the Worker.
+npm run build
+npx wrangler deploy
+
+# 2. The secrets — never in the repository.
+npx wrangler secret put DATABASE_URL
+npx wrangler secret put DYNAMIC_WEBHOOK_SECRET
+npx wrangler secret put DYNAMIC_API_TOKEN
+npx wrangler secret put NEON_REALTIME_SECRET
+npx wrangler secret put SOLANA_RPC_URL     # the provider's endpoint, with its key
+
+# 3. The public values, in wrangler.jsonc → vars.
+#    APP_ORIGINS, DYNAMIC_ENVIRONMENT_ID, VITE_PUBLIC_APP_URL, NEON_REALTIME_URL…
+
+# 4. The local equivalent: the same Worker, with the real bindings.
+npx wrangler dev
+```
+
+`wrangler.jsonc` holds the public configuration; the secrets go through
+`wrangler secret put`. A custom domain is added with
+`npx wrangler deploy --routes` or from the dashboard.
+
+> The Phase 3/4 runbook below was written before the Worker was built, so
+> the decisions stay reviewable.
 
 **Environments.** Two, each with its own everything:
 

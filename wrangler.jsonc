@@ -1,0 +1,50 @@
+{
+  // The Cloudflare Worker that serves the landing and the API.
+  //
+  // `wrangler.jsonc` over `wrangler.toml`: the JSONC form carries comments,
+  // and a config this important deserves to explain itself.
+  //
+  // What is where:
+  //   - `assets`      the built SPA, with the history fallback for a deep link
+  //   - `vars`        the public configuration, baked into the deployment
+  //   - `secrets`     NOT here: DATABASE_URL, DYNAMIC_WEBHOOK_SECRET,
+  //                   DYNAMIC_API_TOKEN, NEON_REALTIME_SECRET and
+  //                   SOLANA_RPC_URL are set with `wrangler secret put`
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "rewallet",
+  "main": "src/worker.ts",
+  // A date from 2026-08-04 onwards turns on `nodejs_compat` (and v2) by
+  // itself, and a date from 2025-09-01 onwards turns on the Node HTTP
+  // server modules. That is what lets the Express app run unchanged.
+  "compatibility_date": "2026-10-21",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // A deep link such as /pay/<slug> is a client route, not a file: the
+    // platform answers it with the SPA's index.html.
+    "not_found_handling": "single-page-application"
+  },
+  "triggers": {
+    // The reconciliation sweep. Every five minutes, like the local timer.
+    "crons": ["*/5 * * * *"]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "NODE_ENV": "production",
+    "VITE_SOLANA_CLUSTER": "devnet",
+    "USDC_MINT": "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU",
+    "RPC_PACE_MS": "400",
+    "BALANCE_CACHE_TTL_MS": "60000",
+    "READ_CACHE_TTL_MS": "30000",
+    "USER_CACHE_TTL_MS": "300000",
+    "SWEEPER_INTERVAL_MS": "300000",
+    "DYNAMIC_METRICS_TTL_MS": "300000",
+    "LEDGER_METRICS_TTL_MS": "300000",
+    "APP_ORIGINS": "https://rewallet.app",
+    "DYNAMIC_ENVIRONMENT_ID": "REPLACE_ME",
+    "NEON_REALTIME_DB": "neondb",
+    "NEON_REALTIME_URL": "REPLACE_ME"
+  }
+}

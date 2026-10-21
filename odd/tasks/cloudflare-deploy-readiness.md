@@ -582,3 +582,151 @@ cannot.*
 
 
 
+
+
+---
+
+# Work unit 7 — Fase 1: the Workers port
+
+The user has a domain and wants the landing and the API on Cloudflare
+Workers, to go looking for the first users with devnet payments.
+
+## What the port actually requires
+
+The compat surface turned out to be small, and the map is the decision:
+
+| Node-ism | Where | Verdict |
+|---|---|---|
+| `pg` Pool (TCP to Postgres) | `src/db/index.ts` | **Does not work.** Neon over HTTP (`drizzle-orm/neon-http`) replaces it |
+| `node:fs` read of the tunnel URL | `server.ts:1025` | The tunnel is a local-only workflow; the route goes away in the Worker |
+| The self-rescheduling sweeper timer | `server.ts` | **Does not work.** A Worker has no long-lived process; it becomes a Cron Trigger |
+| `express.static` + `sendFile` | `server.ts:1128-1132` | **Does not work.** The Workers static-assets binding serves the SPA |
+| `node:crypto` (HMAC, timingSafeEqual) | `paymentLinks.ts`, `webhookIngestor.ts` | Works under `nodejs_compat` |
+| `node:path`, `node:url` | `server.ts` | Work under `nodejs_compat` |
+| `process.env` | everywhere | Works: `nodejs_compat` populates it from the `env` bindings |
+| `node:net`, `node:http`, `node:async_hooks` | `apiGate.test.ts` only | Test files never ship |
+
+## Specs
+
+### S13 — One Worker serves the landing and the API
+
+The SPA is served by the static-assets binding with the single-page-application
+fallback, and `/api/*` goes to the Express app. One deployment, one origin,
+one TLS certificate — which is also what makes the Dynamic origin and the
+webhook URL stable.
+
+**Acceptance**
+- `src/worker.ts` is the Worker entry: a `fetch` that routes `/api/*` to the
+  app and everything else to the assets, and a `scheduled` handler.
+- The API answers 404 for a non-API path, and the SPA answers 200 for a deep
+  link (`/pay/...`).
+- The tunnel endpoint is gone from the Worker: it was a local-only workflow.
+
+### S14 — The runtime config
+
+The URL of a Worker is not known until it is deployed, and the tunnel's URL
+changes on every restart. So the values the browser needs cannot be baked
+into the bundle.
+
+**Acceptance**
+- `GET /api/config` returns the public runtime values: the app URL, the RPC
+  endpoints, the cluster, the Dynamic environment and the Realtime URL.
+- The browser reads them once, before the wallet app renders, and every
+  consumer that used to read `import.meta.env` at module scope reads them
+  lazily instead — a module-scope read happens before the config arrives.
+
+### S15 — The database over HTTP
+
+**Acceptance**
+- The server talks to Neon through `drizzle-orm/neon-http`; no TCP socket is
+  opened from the Worker.
+- The per-request query counter still works, because the audit scripts and
+  the `/api/health` probe depend on it.
+- The three raw `pool.query` calls become drizzle statements.
+
+### S16 — The sweeper becomes a Cron Trigger
+
+**Acceptance**
+- The reconciliation job runs from the `scheduled` handler, not from a timer.
+- It works through a **batch cursor**, so a cohort bigger than one run does
+  not exceed the Cron's wall-clock budget: each run sweeps a bounded batch
+  and stores where it stopped.
+
+## Tasks
+
+| ID | Task | Specs | Route | Status |
+|----|------|-------|-------|--------|
+| T15 | The Worker entry, the static assets and the runtime config | S13, S14 | inline | pending |
+| T16 | The database over HTTP | S15 | inline | pending |
+| T17 | The sweeper as a Cron Trigger | S16 | inline | pending |
+| T18 | The deploy configuration and the runbook | S13–S16 | inline | pending |
+| T19 | The native review of the port | S13–S16 | inline | pending |
+
+## Log
+
+### Analysis — 2026-10-21 (the port map)
+
+The port was scoped before any code was written, because the decision that
+matters is not "how do we run Express on a Worker" but "what does this app
+actually use from Node". The answer was four things, and three of them are
+the runtime itself rather than the app.
+
+**The decision on the HTTP framework**: the app keeps **Express**. Porting
+twenty-two routes, the session gate, the rate limiter, the CORS, the raw-body
+webhook and the error handling to Hono in the same change as the runtime port
+would double the diff and double the review surface, and none of it would
+make the first user arrive sooner. Express runs on Workers through
+`nodejs_compat`; the performance difference is irrelevant for a cohort of
+five.
+
+**The decision on the local workflow**: the Node process stops being the
+target. The local development becomes `wrangler dev`, which runs the Worker
+locally with its bindings — so the local environment and the deployed one are
+the same code path. That is the point of the port.
+
+
+### Progress — 2026-10-21 (Fase 1 built and verified on the Worker)
+
+The port is done and it runs. What was verified **inside the Worker**, not
+in Node:
+
+| Check | Result |
+|---|---|
+| `GET /api/health` | 200, and the database reports `ok` — the HTTP driver works |
+| `GET /` (the landing) | 200, from the assets binding |
+| `GET /pay/abc` (a deep link) | 200 — the history fallback serves the SPA |
+| `GET /api/wallet` without a session | 401 `missing_token` — the gate holds |
+| `POST /api/webhooks/dynamic` with a valid HMAC | 200 — **the raw body survives the Request → Node http → Express bridge**, which is the part that had to work for the webhook to be trusted at all |
+| The same webhook with a bad signature | 401 `signature mismatch` |
+| CORS and the CSP header | present, with the exact origin |
+| The Cron handler | fires and returns `ok` |
+
+**The decisions, and what they cost**
+
+- **Express stayed.** The Worker runs the app through `node:http` and
+  `handleAsNodeRequest`, so no route changed. The alternative — porting
+  twenty-two routes to another framework — would have doubled the diff and
+  the review surface for a cohort of five.
+- **The Dynamic SDK left the server bundle.** The SDK checks its own package
+  version with a timer at import time, and a Worker forbids a timer in the
+  global scope. The SDK is client-only, so the barrel stopped re-exporting
+  the network helpers and the three components that need them import them
+  directly.
+- **Express 5.** The app was on Express 4, where a rejected handler leaves
+  the request hanging with no status and no body: the user waits until the
+  client gives up. Express 5 forwards the rejection to the error handler, and
+  the error handler answers 500. That was a latent defect on the Node path
+  too, and it is now closed on both.
+- **`/api/config` is the single source of truth.** The build and the Worker
+  no longer disagree about the URL, the RPC or the environment: the browser
+  asks the deployment, before it renders.
+
+**What is still open**
+
+- **The sweep has no cursor yet.** The Cron's wall-clock budget is fifteen
+  minutes and the sweep paces itself at 500 ms per wallet, so a cohort of
+  roughly ten users fits. Past that the sweep needs a batch cursor (a KV
+  binding), which is the first thing to add when the cohort grows.
+- **The public devnet RPC is already rate-limiting** (the sweep came back
+  `rateLimited` on its first run). The provider's endpoint is not optional
+  for a cohort, it is the price of admission.

@@ -8,7 +8,7 @@
  * rate-limits bursts.
  */
 
-import { pool } from '../db';
+import { pool } from '../db/nodePool';
 import { syncAllWallets } from '../services/historySync';
 
 async function main(): Promise<void> {

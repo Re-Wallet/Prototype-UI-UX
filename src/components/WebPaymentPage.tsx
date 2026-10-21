@@ -3,7 +3,12 @@ import { transferAmount } from '@dynamic-labs-sdk/client';
 import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 import { useGetWalletAccounts, useInitStatus, useUser } from '@dynamic-labs-sdk/react-hooks';
 import { CheckCircle2, Loader2 } from 'lucide-react';
-import { assetByMint, chain, type Address } from '../adapters';
+import {
+  assetByMint,
+  chain,
+  type Address,
+} from '../adapters';
+import { ensureDynamicNetwork } from '../adapters/dynamic-network';
 import { getDynamicClient } from '../dynamicClient';
 import { playPaymentConfirmed, unlockAudio } from '../services/sound';
 import { BackToHomeButton } from './BackToHomeButton';
@@ -225,7 +230,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
       // building a transaction, otherwise the fee payer is debited on a
       // network where it has no balance and the failure is an opaque
       // simulation error.
-      const alignment = await chain.ensureDynamicNetwork(payerWallet);
+      const alignment = await ensureDynamicNetwork(payerWallet);
       if (!alignment.ok) {
         throw new Error(
           alignment.alignment.reason ??

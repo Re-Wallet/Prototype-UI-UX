@@ -10,8 +10,20 @@
 
 import { createRealtimeClient } from '@neon/realtime/client';
 
-const rawUrl: unknown = import.meta.env.VITE_NEON_REALTIME_URL;
-const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
+import { runtimeConfig } from '../config/runtime';
+
+/**
+ * The Realtime endpoint, from the deployment when it is known.
+ *
+ * The build-time value is the fallback: the local development and a static
+ * preview have no Worker to ask.
+ */
+function realtimeUrl(): string {
+  const runtime = runtimeConfig().realtimeUrl;
+  if (runtime?.trim()) return runtime.trim();
+  const raw: unknown = import.meta.env.VITE_NEON_REALTIME_URL;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
 
 /**
  * The client logs its lifecycle at `info`.
@@ -22,5 +34,23 @@ const url = typeof rawUrl === 'string' ? rawUrl.trim() : '';
  * difference visible — in the browser console, and in a demo, where it is
  * also proof that the ledger is live.
  */
-export const realtimeClient =
-  url.length > 0 ? createRealtimeClient({ url, logLevel: 'info' }) : null;
+/**
+ * The Realtime client, created on first use.
+ *
+ * It cannot be a module-level constant: the endpoint arrives from
+ * `/api/config`, which is fetched before the app renders — and a constant
+ * built at import time would never see it.
+ */
+let client: ReturnType<typeof createRealtimeClient> | null = null;
+let created = false;
+
+export function getRealtimeClient(): ReturnType<typeof createRealtimeClient> | null {
+  if (!created) {
+    created = true;
+    const url = realtimeUrl();
+    if (url.length > 0) {
+      client = createRealtimeClient({ url, logLevel: 'info' });
+    }
+  }
+  return client;
+}

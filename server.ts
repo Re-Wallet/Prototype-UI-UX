@@ -24,7 +24,7 @@
 import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
-import express, { type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -72,9 +72,10 @@ import {
   recordWebhookDelivery,
   verifyDynamicSignature,
 } from './src/services/webhookIngestor';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
-import { db, pool, warmPool } from './src/db';
+import { db, warmPool } from './src/db';
+import { isWorkersRuntime } from './src/server/runtime';
 import { landingSurveyResponses, users as usersTable } from './src/db/schema';
 import {
   BASE58_RE,
@@ -110,6 +111,8 @@ process.on('uncaughtException', (error) => {
 
 const PORT = Number(process.env.API_PORT ?? 3001);
 const HOST = process.env.API_HOST ?? '127.0.0.1';
+
+
 
 /**
  * `express.json` must keep the exact request bytes: Dynamic signs the RAW
@@ -366,7 +369,7 @@ app.get('/api/health', async (_req, res) => {
   // map of the infrastructure. The status is enough for a probe.
   let database: { status: string };
   try {
-    await pool.query('SELECT 1');
+    await db.execute(sql`SELECT 1`);
     database = { status: 'ok' };
   } catch (error) {
     console.error('[health] database probe failed:', error);
@@ -790,6 +793,35 @@ app.post('/api/wallet/contacts', sessionGate(walletFromBody), writeRateLimit, as
 });
 
 // ============================================================================
+// RUNTIME CONFIG
+// ============================================================================
+
+/**
+ * The public configuration of this deployment.
+ *
+ * The browser needs four things that a build cannot know: the URL the app is
+ * served from, the RPC it reads the chain from, the cluster, and the Dynamic
+ * environment. Baking them into the bundle makes the build and the Worker two
+ * sources of truth for the same fact — and they drift the first time the
+ * domain changes.
+ *
+ * Everything here is public by definition: it reaches the browser either
+ * way. The secrets stay in the environment and never come through here.
+ */
+app.get('/api/config', (_req: Request, res: Response) => {
+  res.json({
+    appUrl: process.env.VITE_PUBLIC_APP_URL ?? process.env.APP_ORIGINS?.split(',')[0] ?? '',
+    rpcUrl: process.env.VITE_SOLANA_RPC || process.env.SOLANA_RPC_URL || '',
+    rpcSubscriptionsUrl: process.env.VITE_SOLANA_RPC_WS || '',
+    cluster: process.env.VITE_SOLANA_CLUSTER ?? 'devnet',
+    dynamicEnvironmentId:
+      process.env.VITE_DYNAMIC_ENVIRONMENT_ID ?? process.env.DYNAMIC_ENVIRONMENT_ID ?? '',
+    realtimeUrl: process.env.VITE_NEON_REALTIME_URL ?? process.env.NEON_REALTIME_URL ?? '',
+    realtimeDb: process.env.VITE_NEON_REALTIME_DB ?? process.env.NEON_REALTIME_DB ?? '',
+  });
+});
+
+// ============================================================================
 // USER PROVISIONING
 // ============================================================================
 
@@ -1122,13 +1154,37 @@ app.post('/api/landing/survey', async (req, res) => {
 });
 
 // ============================================================================
+// ERROR HANDLER
+// ============================================================================
+
+/**
+ * The last word on a failed request.
+ *
+ * Without it, a handler that throws leaves the request hanging: the
+ * connection stays open with no status and no body, and the user waits
+ * until the client gives up. Express 5 forwards a rejected handler to this
+ * middleware, so the failure becomes an answer.
+ *
+ * The log is the point: the client gets a generic message (the details are
+ * not for them) and the operator gets the stack.
+ */
+app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[api] unhandled route error:', error);
+  if (res.headersSent) return;
+  res.status(500).json({ error: 'Unexpected server error.' });
+});
+
+// ============================================================================
 // STATIC (production build)
 // ============================================================================
 
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === 'production' && !isWorkersRuntime()) {
   const distDir = path.resolve(process.cwd(), 'dist');
   app.use(express.static(distDir));
-  app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
+  // A middleware, not a wildcard route: Express 5 requires a named wildcard
+  // (`/*splat`), and a catch-all middleware reads the same without the
+  // version-specific syntax.
+  app.use((_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 }
 
 /**
@@ -1142,6 +1198,9 @@ if (process.env.NODE_ENV === 'production') {
  */
 function shouldListen(): boolean {
   if (process.env.API_NO_LISTEN === '1') return false;
+  // The Worker entry owns the socket. Opening one here would start a second
+  // server inside the same isolate.
+  if (isWorkersRuntime()) return false;
 
   const entry = process.argv[1];
   if (!entry) return true;
@@ -1190,6 +1249,66 @@ if (shouldListen()) {
 export { app };
 
 /**
+ * One reconciliation pass over every registered wallet.
+ *
+ * It lives outside the timer because the Worker has no timer: there, the
+ * Cron Trigger calls this function directly. Same work, same order, two
+ * schedulers.
+ */
+export interface SweepOutcome {
+  /** The RPC answered 429: the chain is saturated, so the pass is partial. */
+  rateLimited: boolean;
+  /** The wallets whose ledger rows changed. */
+  changed: number;
+  /** The wallets the pass looked at. */
+  total: number;
+  /** The payment links whose `expiresAt` has passed. */
+  expired: number;
+  /** The delivery-log rows the pass pruned. */
+  pruned: number;
+}
+
+export async function runHistorySweep(): Promise<SweepOutcome> {
+  // The delivery log is the webhook's idempotency ledger. The sweeper has
+  // already reconciled the chain, so the entries older than a month are
+  // history — and without this the table grows with every delivery Dynamic
+  // ever sends.
+  const pruned = await pruneWebhookDeliveries(30);
+  if (pruned > 0) {
+    console.log(`[sweeper] pruned ${pruned} old webhook deliveries`);
+  }
+
+  const { results, rateLimited } = await syncAllWallets(500);
+
+  if (rateLimited) {
+    return { rateLimited: true, changed: 0, total: results.length, expired: 0, pruned };
+  }
+
+  const changed = results.filter((r) => r.inserted + r.updated > 0);
+  if (changed.length > 0) {
+    console.log(
+      `[sweeper] ${changed.length}/${results.length} wallet(s) updated: ` +
+        changed
+          .map((r) => `${r.publicKey.slice(0, 8)}… (+${r.inserted}/~${r.updated})`)
+          .join(', ')
+    );
+  }
+
+  // Expire payment links whose `expiresAt` has passed.
+  const expired = await expireStalePaymentLinks();
+  if (expired > 0) console.log(`[sweeper] ${expired} payment links expirados`);
+
+  return {
+    rateLimited: false,
+    changed: changed.length,
+    total: results.length,
+    expired,
+    pruned,
+  };
+}
+
+
+/**
  * Periodic RPC sweep over every registered wallet.
  *
  * Webhooks only fire for CONFIRMED transactions (and never for failures), so
@@ -1232,18 +1351,9 @@ function startHistorySweeper(): void {
 
     void (async () => {
       try {
-        // The delivery log is the webhook's idempotency ledger. The sweeper
-        // has already reconciled the chain, so the entries older than a month
-        // are history — and without this the table grows with every delivery
-        // Dynamic ever sends.
-        const pruned = await pruneWebhookDeliveries(30);
-        if (pruned > 0) {
-          console.log(`[sweeper] pruned ${pruned} old webhook deliveries`);
-        }
+        const outcome = await runHistorySweep();
 
-        const { results, rateLimited } = await syncAllWallets(500);
-
-        if (rateLimited) {
+        if (outcome.rateLimited) {
           noteRateLimit();
           currentDelayMs = Math.min(currentDelayMs * 2, maxBackoffMs);
           console.warn(
@@ -1255,18 +1365,6 @@ function startHistorySweeper(): void {
             currentDelayMs = baseIntervalMs;
             console.log(`[sweeper] RPC healthy again; cadence back to ${baseIntervalMs / 1000}s`);
           }
-          const changed = results.filter((r) => r.inserted + r.updated > 0);
-          if (changed.length > 0) {
-            console.log(
-              `[sweeper] ${changed.length}/${results.length} wallet(s) updated: ` +
-                changed
-                  .map((r) => `${r.publicKey.slice(0, 8)}… (+${r.inserted}/~${r.updated})`)
-                  .join(', ')
-            );
-          }
-          // Expire payment links whose `expiresAt` has passed.
-          const expired = await expireStalePaymentLinks();
-          if (expired > 0) console.log(`[sweeper] ${expired} payment links expirados`);
         }
       } catch (error) {
         console.error(

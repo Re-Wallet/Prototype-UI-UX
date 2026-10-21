@@ -1,5 +1,7 @@
 import { createDynamicClient } from '@dynamic-labs-sdk/client';
 
+import { runtimeConfig } from './config/runtime';
+
 let client: ReturnType<typeof createDynamicClient> | undefined;
 
 /**
@@ -11,7 +13,10 @@ let client: ReturnType<typeof createDynamicClient> | undefined;
  */
 export function getDynamicClient() {
   if (!client) {
-    const environmentId = import.meta.env?.VITE_DYNAMIC_ENVIRONMENT_ID;
+    // The deployment knows its own Dynamic environment; the bundle was
+    // built before the environment was chosen.
+    const environmentId =
+      runtimeConfig().dynamicEnvironmentId ?? import.meta.env?.VITE_DYNAMIC_ENVIRONMENT_ID;
     if (!environmentId) {
       throw new Error('Set VITE_DYNAMIC_ENVIRONMENT_ID to your Dynamic environment ID.');
     }

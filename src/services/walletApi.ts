@@ -5,6 +5,7 @@
  * working on-chain data alone when the local server is not running.
  */
 
+import { runtimeConfig } from '../config/runtime';
 import type { Transaction } from '../types/wallet';
 import type { SealedLiveQuery } from '@neon/realtime/client';
 import type { LiveTransactionRow } from './transactionMapper';
@@ -506,6 +507,12 @@ export function resolveAppHomeUrl(): string {
   const host = window.location.hostname;
   const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
 
+  // The deployment knows its own public origin. The browser's own origin is
+  // the same thing in a normal deployment, but the configured value is the
+  // one the payment links are built from, so it wins.
+  const deployed = runtimeConfig().appUrl?.trim();
+  if (deployed && !isLocal) return deployed.replace(/\/$/, '');
+
   if (!isLocal) return window.location.origin;
 
   const configured = import.meta.env.VITE_PUBLIC_APP_URL?.trim();
@@ -526,6 +533,11 @@ export function resolveAppHomeUrl(): string {
 export async function fetchPublicAppUrl(): Promise<string | null> {
   const host = window.location.hostname;
   const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+
+  // The deployment's own origin, when it reported one.
+  const deployed = runtimeConfig().appUrl?.trim();
+  if (deployed && !isLocal) return deployed.replace(/\/$/, '');
+
   if (!isLocal) return window.location.origin;
   try {
     const data = await request<{ url: string | null }>('/api/tunnel');
