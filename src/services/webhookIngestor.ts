@@ -93,6 +93,17 @@ export function verifyDynamicSignature(
  */
 const MAX_TRANSFER_AMOUNT = 1e12;
 
+/**
+ * How long a delivery stays reprojectable.
+ *
+ * A projection that wrote nothing — an unregistered wallet, a payload that
+ * cannot be parsed — would otherwise be retried on every redelivery, for
+ * ever. Fifteen minutes covers the two real cases (the user signs in and
+ * their row appears seconds later; Dynamic's own redelivery schedule) and
+ * then the sweeper, which reads the chain, is the recovery path.
+ */
+const REPROJECT_WINDOW_MS = 15 * 60 * 1000;
+
 export interface DynamicEnvelope {
   messageId: string;
   eventId?: string | null;
@@ -276,7 +287,11 @@ export async function recordWebhookDelivery(
   if (inserted.length > 0) return { id: inserted[0].id, duplicate: false };
 
   const [existing] = await db
-    .select({ id: webhookEventsTable.id, processedAt: webhookEventsTable.processedAt })
+    .select({
+      id: webhookEventsTable.id,
+      processedAt: webhookEventsTable.processedAt,
+      receivedAt: webhookEventsTable.receivedAt,
+    })
     .from(webhookEventsTable)
     .where(eq(webhookEventsTable.messageId, envelope.messageId))
     .limit(1);
@@ -286,8 +301,22 @@ export async function recordWebhookDelivery(
   // and the link settlement are both idempotent, so the retry converges.
   // Treating an unprocessed delivery as a duplicate dropped the movement for
   // good.
+  //
+  // The window is what keeps that from becoming an endless redelivery. A
+  // delivery that can NEVER be projected — a malformed payload, a wallet
+  // that is never registered — would otherwise be reprojected every time it
+  // arrives, forever. After the window the sweeper has already reconciled
+  // the chain, so the delivery is consumed with the reason on the row.
   if (existing && !existing.processedAt) {
-    return { id: existing.id, duplicate: false };
+    const age = Date.now() - existing.receivedAt.getTime();
+    if (age < REPROJECT_WINDOW_MS) {
+      return { id: existing.id, duplicate: false };
+    }
+    await markWebhookProcessed(
+      existing.id,
+      'the reprojection window closed before the delivery was projected'
+    );
+    return { id: existing.id, duplicate: true };
   }
 
   return { id: existing?.id ?? -1, duplicate: true };

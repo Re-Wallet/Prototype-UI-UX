@@ -552,6 +552,28 @@ Fase 1 migrations.
 database (two wallets, one e-mail, one handle → the second gets a
 disambiguated handle and no e-mail, and the call is idempotent).
 
+### Progress — 2026-10-21 (the third round: the design I introduced, reviewed)
+
+The corrected candidate was recovered into a new lineage and reviewed again.
+The lenses found **three real defects in the design the previous round
+introduced** — all of them consequences of making a delivery reprojectable:
+
+| Finding | Why it is real | What changed |
+|---|---|---|
+| A delivery that failed stayed reprojectable **for ever**, so a persistent failure became an unbounded redelivery loop and the delivery log grew without limit | A projection that can never succeed — an unregistered wallet, a malformed payload — is retried on every arrival | A delivery is reprojectable only for **fifteen minutes**. After that the sweeper has already reconciled the chain, so the delivery is consumed with the reason on the row. The window covers the two real cases: the user's row appears seconds after the sign-in, and Dynamic's own redelivery schedule |
+| A payload that cannot be parsed was left unprocessed | It will never parse, so it is a dead letter, not a transient failure | An unparseable payload is **consumed** with the reason. The sweeper still reconciles the movement from the chain |
+| The claim endpoint polls the chain for up to twenty seconds, and a junk signature held a request handler for the whole budget | The signature was only checked for its LENGTH, so any 32-character string reached the wait. Ten of those per minute per IP is a denial of service with no transaction behind it | The signature is now checked for its **shape** — base58, 64 to 88 characters — before the wait starts. Verified against the real signatures in the ledger (88 characters, accepted) and against garbage (rejected) |
+
+**What this says about the design**: "never consume a delivery that wrote
+nothing" was the right instinct — the movement must not be lost — but
+"never consume it" was the wrong rule, because a delivery that CANNOT be
+projected is not a delivery to keep trying. The rule is now: *a delivery is
+reprojectable while it can still succeed, and consumed with a reason when it
+cannot.*
+
+**Verification**: `npm test` → **136 tests, 136 pass, 0 fail**; `tsc
+--noEmit` clean.
+
 
 
 

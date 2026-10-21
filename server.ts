@@ -210,6 +210,16 @@ const CONFIRM_MAX_ATTEMPTS = 12;
 
 /** The longest single pause between two confirmation reads. */
 const CONFIRM_BACKOFF_MAX_MS = 2_000;
+
+/**
+ * What a Solana transaction signature looks like.
+ *
+ * The claim waits up to twenty seconds for the chain, so the signature is
+ * checked BEFORE that wait starts. A string that cannot be a signature would
+ * otherwise hold a request handler for the whole budget, and a handful of
+ * them would be a denial of service with no transaction to show for it.
+ */
+const BASE58_SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
 const CREATE_LINK_RATE_LIMIT = 30;
 const WRITE_RATE_LIMIT = 60;
 const READ_RATE_LIMIT = 120;
@@ -308,10 +318,11 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
   try {
     if (envelope.eventName === 'wallet.activity') {
       if (!activity) {
-        // A payload that cannot be parsed will never parse. The delivery
-        // stays UNPROCESSED so a redelivery is projected again rather than
-        // silently swallowed — and the reason is on the row.
-        await markWebhookPending(delivery.id, 'unparseable wallet.activity payload');
+        // A payload that cannot be parsed will never parse: it is a dead
+        // letter, not a transient failure. Consuming it stops the redelivery
+        // loop, and the sweeper still reconciles the movement from the
+        // chain. The reason is on the row.
+        await markWebhookProcessed(delivery.id, 'unparseable wallet.activity payload');
         console.warn(`[webhook] unparseable wallet.activity messageId=${envelope.messageId}`);
         return;
       }
@@ -456,7 +467,7 @@ app.post('/api/wallet/transactions/pending', sessionGate(walletFromBody), writeR
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: "wallet must be the sender's base58 Solana address." });
   }
-  if (typeof signature !== 'string' || signature.trim().length < 32) {
+  if (typeof signature !== 'string' || !BASE58_SIGNATURE_RE.test(signature.trim())) {
     return res.status(400).json({ error: 'signature must be the base58 transaction signature.' });
   }
   if (typeof counterpartyPubkey !== 'string' || !BASE58_RE.test(counterpartyPubkey.trim())) {
