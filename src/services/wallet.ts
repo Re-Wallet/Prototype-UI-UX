@@ -641,7 +641,14 @@ export async function upsertContactByPubkey(
 
 export interface WalletSnapshot {
   user: WalletUserProfile;
-  balance: number;
+  /**
+   * The wallet's USDC balance, read from the chain.
+   *
+   * `null` means the chain could not be read. It is NOT zero: a snapshot
+   * that says "0 USDC" for a wallet holding money reads as lost funds, and
+   * that is the one answer a payment app must never give.
+   */
+  balance: number | null;
   transactions: UiTransaction[];
   contacts: UiContact[];
 }
@@ -675,11 +682,15 @@ export async function getWalletSnapshot(userId: number): Promise<WalletSnapshot 
   // money is worse than no snapshot at all. The chain is the only source of
   // truth for a balance — that is the same rule the ledger projection
   // follows.
+  //
+  // When the chain cannot be read the balance is `null`, not zero: "we do
+  // not know" and "you have nothing" are different answers, and a payment
+  // app must not confuse them.
   const balances = await getBalances(user.publicKey).catch(() => null);
 
   return {
     user: profile,
-    balance: balances?.usdc ?? 0,
+    balance: balances?.usdc ?? null,
     transactions,
     contacts,
   };

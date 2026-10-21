@@ -29,7 +29,6 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  countUnreadNotifications,
   getWalletSnapshot,
   getUserByPubkey,
   insertPendingTransfer,
@@ -64,6 +63,7 @@ import {
   expireStalePaymentLinks,
 } from './src/services/paymentLinks';
 import {
+  markWebhookPending,
   markWebhookProcessed,
   parseEnvelope,
   parseWalletActivity,
@@ -194,6 +194,21 @@ const sessionGate = (read: (req: Request) => unknown) => requireSessionFor(sessi
  */
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const CLAIM_RATE_LIMIT = 10;
+
+/**
+ * How long the claim waits for the chain to confirm the payment.
+ *
+ * A transaction that is visible but only `processed` reaches `finalized` in
+ * about thirteen seconds, so a wait shorter than that rejects payments for
+ * being early. Twenty seconds covers it with room for a slow RPC.
+ */
+const CONFIRM_DEADLINE_MS = 20_000;
+
+/** The attempts are a safety cap; the deadline is the real budget. */
+const CONFIRM_MAX_ATTEMPTS = 12;
+
+/** The longest single pause between two confirmation reads. */
+const CONFIRM_BACKOFF_MAX_MS = 2_000;
 const CREATE_LINK_RATE_LIMIT = 30;
 const WRITE_RATE_LIMIT = 60;
 const READ_RATE_LIMIT = 120;
@@ -292,12 +307,26 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
   try {
     if (envelope.eventName === 'wallet.activity') {
       if (!activity) {
-        await markWebhookProcessed(delivery.id, 'unparseable wallet.activity payload');
+        // A payload that cannot be parsed will never parse. The delivery
+        // stays UNPROCESSED so a redelivery is projected again rather than
+        // silently swallowed — and the reason is on the row.
+        await markWebhookPending(delivery.id, 'unparseable wallet.activity payload');
         console.warn(`[webhook] unparseable wallet.activity messageId=${envelope.messageId}`);
         return;
       }
       const result = await projectWalletActivity(envelope, activity);
-      await markWebhookProcessed(delivery.id);
+      if (result.projected > 0) {
+        await markWebhookProcessed(delivery.id);
+      } else {
+        // Nothing was written: the wallet is not registered yet, or no link
+        // matched. The delivery is NOT consumed, so a redelivery — or the
+        // sweeper — can project it once the row exists. Consuming it here
+        // dropped the movement for good.
+        await markWebhookPending(
+          delivery.id,
+          result.ignored ?? 'the projection wrote no movement'
+        );
+      }
       console.log(
         `[webhook] projected ${result.projected} movement(s) for ${transactionHash}` +
           (result.ignored ? ` (${result.ignored})` : '')
@@ -309,7 +338,9 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await markWebhookProcessed(delivery.id, message).catch(() => undefined);
+    // A failed projection is not a processed delivery. The reason is
+    // recorded and the delivery stays available for a redelivery.
+    await markWebhookPending(delivery.id, message).catch(() => undefined);
     console.error(`[webhook] projection failed messageId=${envelope.messageId}: ${message}`);
   }
 });
@@ -762,9 +793,12 @@ app.post('/api/wallet/contacts', sessionGate(walletFromBody), writeRateLimit, as
  * payments never appear, because the webhook has no registered wallet to
  * project the movement onto.
  *
- * The address comes from the **session** — a signed Dynamic token — and never
- * from the request body. The body only carries the profile the user can
- * change about themselves: name, handle, e-mail, phone, country, language.
+ * The address is read from the request body, but it is only ACCEPTED if the
+ * **session** — a signed Dynamic token — controls it: `requireOwnedWallet`
+ * compares it against the addresses the session carries, and the handler
+ * then uses the checked value, not the raw body. The body only carries the
+ * profile the user can change about themselves: name, handle, e-mail, phone,
+ * country, language.
  *
  * It is idempotent: the browser calls it on every sign-in, so a second call
  * refreshes the profile instead of creating a second row.
@@ -884,9 +918,16 @@ app.post('/api/payment-links/claim', claimRateLimit, async (req: Request, res: R
   // with a growing delay — a rate-limited read is NOT the same as a
   // transaction that does not exist, and treating it as one would abandon
   // a perfectly good payment.
+  //
+  // The budget is a DEADLINE, not a count of attempts. A transaction that is
+  // visible but only `processed` becomes `finalized` in about thirteen
+  // seconds on Solana, so a fixed count of attempts can expire before the
+  // chain has finished saying yes — and a legitimate payment would be
+  // rejected for being early. The attempt count stays as a safety cap.
+  const deadline = Date.now() + CONFIRM_DEADLINE_MS;
   let verdict: TransferVerdict = 'not-found';
   let transientFailures = 0;
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < CONFIRM_MAX_ATTEMPTS; attempt++) {
     try {
       // The verification is an RPC read, so it goes through the shared pacing
       // gate: the public devnet endpoint answers bursts with 429, and every
@@ -907,7 +948,10 @@ app.post('/api/payment-links/claim', claimRateLimit, async (req: Request, res: R
     // `processed`, can still become a payment. A mismatch cannot: it is
     // either the wrong recipient, the wrong mint, or the wrong amount.
     if (verdict === 'confirmed' || verdict === 'mismatch') break;
-    await new Promise((resolve) => setTimeout(resolve, 500 + attempt * 500));
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(500 + attempt * 500, CONFIRM_BACKOFF_MAX_MS))
+    );
   }
 
   if (verdict === 'not-found' && transientFailures > 0) {

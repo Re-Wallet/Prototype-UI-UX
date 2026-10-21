@@ -307,6 +307,28 @@ export async function markWebhookProcessed(
     .where(eq(webhookEventsTable.id, deliveryId));
 }
 
+/**
+ * Record that a delivery was understood but NOT applied, and leave it
+ * reprojectable.
+ *
+ * This is the counterpart of `markWebhookProcessed`: it writes the reason
+ * and nothing else, so `processed_at` stays null and the delivery can be
+ * projected again. A delivery is only consumed once it actually wrote
+ * something — a projection that found no registered wallet, or one that
+ * failed halfway, has to stay available for the redelivery (or for the
+ * sweeper) to pick it up.
+ */
+export async function markWebhookPending(
+  deliveryId: number,
+  reason: string
+): Promise<void> {
+  if (deliveryId < 0) return;
+  await db
+    .update(webhookEventsTable)
+    .set({ processError: reason })
+    .where(eq(webhookEventsTable.id, deliveryId));
+}
+
 // ============================================================================
 // PROJECTION
 // ============================================================================

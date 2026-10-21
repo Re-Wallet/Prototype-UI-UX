@@ -110,6 +110,13 @@ export default function App() {
   );
 }
 
+/**
+ * How many times the app tries to create the ledger row before it tells the
+ * user, and how long it waits between tries.
+ */
+const PROVISION_MAX_ATTEMPTS = 3;
+const PROVISION_RETRY_MS = 2_000;
+
 function WalletApp() {
   // English is the product default; the sign-in gate persists the user's
   // choice (see src/i18n/language.ts) and the profile can change it later.
@@ -405,40 +412,6 @@ function WalletApp() {
     void refreshNotifications();
   }, [refreshBalance, refreshTransactions, refreshNotifications]);
 
-  /**
-   * Give the ledger a row for this user.
-   *
-   * The row is the user's identity in the ledger and nothing else creates
-   * it, so without this call the app has no profile for a person who just
-   * signed up, and their payments never appear — the webhook has no
-   * registered wallet to project the movement onto.
-   *
-   * It runs once per wallet: the endpoint is idempotent, but there is no
-   * reason to spend a request on every render.
-   */
-  const provisionedWallet = useRef<string | null>(null);
-  useEffect(() => {
-    const address = solanaWallet?.address;
-    if (!dynamicUser || !address || provisionedWallet.current === address) return;
-
-    provisionedWallet.current = address;
-    void provisionSessionUser({
-      wallet: address as string,
-      handle: dynamicUser.username ?? null,
-      name:
-        [dynamicUser.firstName, dynamicUser.lastName].filter(Boolean).join(' ') || null,
-      email: dynamicUser.email ?? null,
-      phone: dynamicUser.phoneNumber ?? null,
-      country: dynamicUser.country ?? null,
-      language,
-    }).catch((error: unknown) => {
-      // A failure here is not fatal: the app still works from the chain, and
-      // the next sign-in retries. But it is worth saying out loud, because a
-      // silent failure looks exactly like a broken app.
-      console.warn('[api] the ledger row could not be created yet', error);
-    });
-  }, [dynamicUser, solanaWallet, language]);
-
   // The webhook lands seconds after the send, so poll the local feed while the
   // app is open: both the transcript and the bell then update without a manual
   // reload. Polling pauses while the tab is hidden — an invisible tab must not
@@ -500,6 +473,67 @@ function WalletApp() {
       setToast(null);
     }, 4000);
   };
+
+  /**
+   * Give the ledger a row for this user.
+   *
+   * The row is the user's identity in the ledger and nothing else creates
+   * it, so without this call the app has no profile for a person who just
+   * signed up, and their payments never appear — the webhook has no
+   * registered wallet to project the movement onto.
+   */
+  const provisionedWallet = useRef<string | null>(null);
+  const [provisioningFailed, setProvisioningFailed] = useState(false);
+  useEffect(() => {
+    const address = solanaWallet?.address;
+    if (!dynamicUser || !address) return;
+
+    // The key carries the language too: changing it re-runs the request so
+    // the row's language follows the app.
+    const key = `${address}|${language}`;
+    if (provisionedWallet.current === key) return;
+    provisionedWallet.current = key;
+
+    let cancelled = false;
+
+    const provision = async (attempt: number) => {
+      try {
+        await provisionSessionUser({
+          wallet: address as string,
+          handle: dynamicUser.username ?? null,
+          name:
+            [dynamicUser.firstName, dynamicUser.lastName].filter(Boolean).join(' ') || null,
+          email: dynamicUser.email ?? null,
+          phone: dynamicUser.phoneNumber ?? null,
+          country: dynamicUser.country ?? null,
+          language,
+        });
+        if (!cancelled) setProvisioningFailed(false);
+      } catch (error) {
+        if (cancelled) return;
+        console.warn('[api] the ledger row could not be created yet', error);
+
+        // A transient database or network failure is the likely cause, so it
+        // is worth another try before saying anything to the user.
+        if (attempt < PROVISION_MAX_ATTEMPTS) {
+          setTimeout(() => void provision(attempt + 1), PROVISION_RETRY_MS * attempt);
+          return;
+        }
+
+        // Out of retries. The failure is NOT silent: a missing row means
+        // this user's payments are never projected, and a silent failure
+        // looks exactly like a broken app. The banner stays until the page
+        // is reloaded, because a four-second toast is not enough for
+        // something the user has to act on.
+        setProvisioningFailed(true);
+      }
+    };
+
+    void provision(1);
+    return () => {
+      cancelled = true;
+    };
+  }, [dynamicUser, solanaWallet, language]);
 
   const handleTabChange = (tab: NavTab) => {
     setActiveTab(tab);
@@ -780,6 +814,19 @@ function WalletApp() {
               onLinks={handleLiveLinks}
               onStatus={(live) => handleRealtimeStatus('paymentLinks', live)}
             />
+          )}
+
+          {/* The ledger row could not be created. It stays until the page is
+              reloaded: without the row, this user's payments are never
+              projected, and a silent failure looks exactly like a broken
+              app. */}
+          {provisioningFailed && (
+            <div
+              role="alert"
+              className="z-50 mx-2 mt-2 rounded-xl border border-red-500/40 bg-red-950/80 px-3 py-2 text-xs leading-relaxed text-red-100"
+            >
+              No pudimos crear tu perfil. Recargá la página: sin tu perfil no se registran tus pagos.
+            </div>
           )}
 
           {/* Screen Content */}
