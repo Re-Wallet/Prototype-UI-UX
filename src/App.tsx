@@ -324,30 +324,6 @@ function WalletApp() {
   }, []);
 
   const liveFingerprintRef = useRef<string | null>(null);
-  const handleLiveTransactions = useCallback(
-    (rows: Transaction[]) => {
-      setTransactions((current) => mergeTransactionLists(current, rows));
-
-      // Identity + status of every row: a pending→completed flip changes the
-      // balance without changing the row count, so length alone is not enough.
-      const fingerprint = rows
-        .map((row) => `${row.id ?? row.txHash ?? ''}:${row.status}`)
-        .join('|');
-
-      if (liveFingerprintRef.current === null) {
-        liveFingerprintRef.current = fingerprint;
-        return;
-      }
-      if (liveFingerprintRef.current === fingerprint) return;
-
-      liveFingerprintRef.current = fingerprint;
-      // `fresh` bypasses the balance cache — the whole point, since a movement
-      // just landed and the cached value is provably stale.
-      void refreshBalance({ fresh: true });
-    },
-    [refreshBalance]
-  );
-
   const refreshNotifications = useCallback(async () => {
     if (!solanaWallet) {
       setNotifications([]);
@@ -368,6 +344,35 @@ function WalletApp() {
     setIsNotificationsLoading(false);
   }, [solanaWallet?.address]);
 
+  const handleLiveTransactions = useCallback(
+    (rows: Transaction[]) => {
+      setTransactions((current) => mergeTransactionLists(current, rows));
+
+      // Identity + status of every row: a pending→completed flip changes the
+      // balance without changing the row count, so length alone is not enough.
+      const fingerprint = rows
+        .map((row) => `${row.id ?? row.txHash ?? ''}:${row.status}`)
+        .join('|');
+
+      if (liveFingerprintRef.current === null) {
+        liveFingerprintRef.current = fingerprint;
+        return;
+      }
+      if (liveFingerprintRef.current === fingerprint) return;
+
+      liveFingerprintRef.current = fingerprint;
+      // `fresh` bypasses the balance cache — the whole point, since a movement
+      // just landed and the cached value is provably stale.
+      void refreshBalance({ fresh: true });
+      // The bell rides the same event: the webhook that writes a
+      // notification always writes the movement too, so the notification feed
+      // does not have to wait for the poll to notice it.
+      void refreshNotifications();
+    },
+    [refreshBalance, refreshNotifications]
+  );
+
+
   useEffect(() => {
     void refreshBalance();
     void refreshTransactions();
@@ -384,9 +389,12 @@ function WalletApp() {
       void refreshTransactions(true);
       void refreshNotifications();
     };
+    // Realtime pushes the movements and the charges; the poll is the floor
+    // under them, not the way the UI learns about a change. Sixty seconds is
+    // enough to notice what a broken subscription would hide.
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') tick();
-    }, 20_000);
+    }, 60_000);
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') tick();
