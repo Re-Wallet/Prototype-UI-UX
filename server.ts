@@ -45,6 +45,7 @@ import { assetBySymbol, chain, confirmTransferToRecipient, type Address } from '
 import { getBalances } from './src/services/balanceCache';
 import { cacheKey, getCached } from './src/services/readCache';
 import { getUserIdByPubkey } from './src/services/userCache';
+import { provisionUser } from './src/services/userProvisioning';
 import { dbQueryCounter } from './src/services/dbMetrics';
 import { getSignatureFeePayer, verifySignatureOwnership } from './src/services/signatureOwnership';
 import { pacedRpc } from './src/services/rpcThrottle';
@@ -81,6 +82,8 @@ import {
   createRateLimiter,
   defaultAllowedOrigins,
   parseOriginPatterns,
+  requireOwnedWallet,
+  requireSession,
   requireSessionFor,
   securityHeaders,
   walletFromBody,
@@ -745,6 +748,58 @@ app.post('/api/wallet/contacts', sessionGate(walletFromBody), writeRateLimit, as
   const contact = await upsertContactByPubkey(user.id, publicKey, name);
   res.status(contact ? 200 : 400).json(contact ?? { error: 'Could not save the recipient.' });
 });
+
+// ============================================================================
+// USER PROVISIONING
+// ============================================================================
+
+/**
+ * Create the ledger row for the signed-in user.
+ *
+ * The ledger is keyed by `users.public_key`, and nothing else creates that
+ * row. Without this endpoint a person who signs in with Dynamic has a wallet
+ * but no profile: the app answers "no wallet data is available" and their
+ * payments never appear, because the webhook has no registered wallet to
+ * project the movement onto.
+ *
+ * The address comes from the **session** — a signed Dynamic token — and never
+ * from the request body. The body only carries the profile the user can
+ * change about themselves: name, handle, e-mail, phone, country, language.
+ *
+ * It is idempotent: the browser calls it on every sign-in, so a second call
+ * refreshes the profile instead of creating a second row.
+ */
+app.post(
+  '/api/users/session',
+  requireSession(sessionVerifier),
+  requireOwnedWallet(walletFromBody),
+  async (req: Request, res: Response) => {
+    const wallet = req.sessionWallet;
+    if (!wallet) {
+      return res.status(400).json({ error: 'wallet is required.' });
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const text = (value: unknown): string | null =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
+
+    const provisioned = await provisionUser(wallet, {
+      handle: text(body.handle),
+      name: text(body.name),
+      email: text(body.email),
+      phone: text(body.phone),
+      country: text(body.country),
+      language: text(body.language),
+    });
+
+    res.json({
+      id: provisioned.id,
+      publicKey: provisioned.publicKey,
+      handle: provisioned.handle,
+      created: provisioned.created,
+    });
+  }
+);
 
 // ============================================================================
 // SETTINGS

@@ -156,6 +156,43 @@ export async function fetchWalletBalances(
 }
 
 /**
+ * The profile the browser hands over when it provisions the ledger row.
+ *
+ * The wallet is the only field the server cannot verify for itself — and it
+ * does not take it on trust: the server takes the address from the signed
+ * session and only uses the body for the profile the user owns.
+ */
+export interface SessionProfilePayload {
+  wallet: string;
+  handle?: string | null;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  country?: string | null;
+  language?: string | null;
+}
+
+/**
+ * Make sure the ledger has a row for the signed-in user.
+ *
+ * The row is the user's identity in the ledger, and nothing else creates it.
+ * Without this the app works for the two seeded accounts and for nobody
+ * else. The call is idempotent: it runs on every sign-in and refreshes the
+ * profile in place.
+ */
+export async function provisionSessionUser(
+  profile: SessionProfilePayload
+): Promise<{ id: number; handle: string; created: boolean }> {
+  return await request<{ id: number; handle: string; created: boolean }>(
+    '/api/users/session',
+    {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    }
+  );
+}
+
+/**
  * Wire shape of the public identity lookup for a Solana address.
  *
  * The display handle only. The account e-mail used to be part of this

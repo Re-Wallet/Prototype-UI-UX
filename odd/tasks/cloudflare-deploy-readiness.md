@@ -369,6 +369,134 @@ unrelated `sync_target_closed_space` finding for other projects). This file
 is the source of truth and it is committed; the mirror is retried whenever the
 session registration recovers.
 
+---
+
+# Work unit 6 — production readiness
+
+The user asked for a final, complete pass over everything discovered, so the
+next phase goes straight to deploying the first prototype: fix or mitigate
+every defect, optimize the code and the repository, and leave the launch
+blockers written down.
+
+## Specs
+
+### S9 — A new user gets a ledger row
+
+The application has **no path that creates a `users` row**. The table has two
+rows, both seeded by hand. A user who signs in with Dynamic gets a Dynamic
+wallet, and then:
+
+- `GET /api/wallet` resolves the wallet to a user id and finds nothing →
+  `404 "No wallet data is available"`.
+- The `wallet.activity` webhook for that address finds no registered wallet →
+  the movement is not projected, so **the payment never appears**.
+
+The README asserts the opposite ("the `users` row is created on first
+Dynamic login"). That claim is false in this repository, and it is the single
+biggest reason the app would look broken to every user who is not one of the
+two seeded rows.
+
+**Acceptance**
+- A session-verified endpoint creates the row on the caller's first sign-in,
+  with `publicKey` taken from the **session** and never from the request body.
+- It is idempotent: calling it again refreshes the mutable profile fields
+  instead of failing.
+- The `handle` is unique (`uk_users_handle`), derived from the Dynamic
+  profile, and disambiguated deterministically when it collides.
+- The client calls it once the session and the Solana wallet are both
+  available, and a failure is visible rather than silent.
+- The webhook's "no registered wallet" outcome is recorded honestly instead
+  of being marked as a successful projection.
+
+### S10 — The money paths hold up
+
+**Acceptance**
+- A payment link only settles on a transaction that is `confirmed` or
+  `finalized`; a merely `processed` transaction is retried, not rejected as
+  a mismatch.
+- The webhook rejects a transfer amount that is not a positive, finite,
+  bounded number.
+- A webhook delivery that was not projected stays reprojectable: the
+  `messageId` dedupe distinguishes "already processed" from "already seen",
+  so a redelivery after a failure converges.
+- `/api/payment-links/claim` refuses an expired link.
+- `GET /api/wallet` reports the balance read from the chain, not from a
+  column the server never writes.
+
+### S11 — The repository is clean and the documentation is true
+
+**Acceptance**
+- The five advisory findings from the review are resolved: the fetch timeout
+  has a maximum, the sweep comment says what the sweep does, the timeout
+  error names the value the caller passed, and the exported sweep helper
+  documents its precondition (and stays out of the public barrel).
+- The service exports with no importer are removed, and the unused import in
+  `server.ts` is gone.
+- Every comment, doc comment and README claim that contradicts the code is
+  corrected.
+- `package.json` carries the metadata a real project carries: name, version,
+  description, license, repository, engines.
+- The two copies of the base58 rule cannot drift apart: a contract test
+  pins the server's rule to the adapter's.
+
+### S12 — The launch blockers that are not code are written down
+
+**Acceptance**
+- The README's go-live checklist names the RPC provider, the Dynamic
+  origins and webhook, the stable origin, and the privacy notice, with what
+  each one blocks.
+
+## Tasks
+
+| ID | Task | Specs | Route | Status |
+|----|------|-------|-------|--------|
+| T10 | Provision the user row on the first sign-in | S9 | inline | pending |
+| T11 | Harden the three money paths | S10 | inline | pending |
+| T12 | Clean the repository and make the docs true | S11 | inline | pending |
+| T13 | Write down the non-code launch blockers | S12 | inline | pending |
+| T14 | Final native review of the whole feature | S9–S12 | inline | pending |
+
+## Log
+
+### Analysis — 2026-10-21 (the read-only audit)
+
+A read-only audit of the three money/identity paths and the repository
+hygiene returned two further **CRITICAL** findings that the security review
+had not reached, because it had only covered the Phase 0 surface:
+
+1. **A webhook delivery whose projection found no registered wallet was
+   marked processed.** The `messageId` dedupe is permanent, so the movement
+   was dropped from the webhook path for good, with only the sweeper as a
+   recovery route.
+2. **The projection has no database transaction.** A failure after the
+   transaction upsert left a committed row, an unwritten notification, and a
+   delivery already consumed.
+
+Plus: `confirmTransferToRecipient` settled a transaction that was only
+`processed` (never `finalized`); the webhook accepted any numeric amount;
+`/api/wallet` reported a balance from a column the server never writes (so
+it was permanently zero); an expired link could still be claimed; and
+`referenceId` collapsed two same-symbol movements in one transaction.
+
+**Decisions taken**
+
+- The projection is made **reprojectable** instead of transactional. The
+  ledger upsert and the link settlement are already idempotent, so making
+  the delivery dedupe distinguish "processed" from "seen" lets Dynamic's own
+  redelivery converge a failed projection. Threading a transaction executor
+  through four write functions in the same PR as a provisioning change would
+  put more risk in the ledger than the defect it removes. **This is a known,
+  documented gap with a Fase 1 follow-up**, not a silent one.
+- The `referenceId` format is **not** changed. The webhook and the sweeper
+  must build the same key or the send-time `pending` row and the projection
+  would address different rows. A rare double-transfer of the same symbol in
+  one transaction is documented instead.
+- The duplicated base58 rule is held together by a **contract test**, not by
+  a refactor across the client/server boundary.
+- `GET /api/wallet` keeps its shape and reads the balance from the chain, so
+  there is one source of truth for money.
+
+
 
 
 

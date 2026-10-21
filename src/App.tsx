@@ -35,7 +35,12 @@ import { getStoredLanguage, storeLanguage, subscribeLanguage } from './i18n/lang
 import { DynamicAccountGate } from './components/DynamicAccountGate';
 import { assetBySymbol, chain, type Address } from './adapters';
 import { getWalletTransactions } from './services/solanaHistory';
-import { fetchPaymentLinks, fetchWalletTransactions, type PaymentLinkDto } from './services/walletApi';
+import {
+  fetchPaymentLinks,
+  fetchWalletTransactions,
+  provisionSessionUser,
+  type PaymentLinkDto,
+} from './services/walletApi';
 import { toPendingChargeTransactions } from './services/pendingCharges';
 import {
   fetchNotifications,
@@ -399,6 +404,40 @@ function WalletApp() {
     void refreshTransactions();
     void refreshNotifications();
   }, [refreshBalance, refreshTransactions, refreshNotifications]);
+
+  /**
+   * Give the ledger a row for this user.
+   *
+   * The row is the user's identity in the ledger and nothing else creates
+   * it, so without this call the app has no profile for a person who just
+   * signed up, and their payments never appear — the webhook has no
+   * registered wallet to project the movement onto.
+   *
+   * It runs once per wallet: the endpoint is idempotent, but there is no
+   * reason to spend a request on every render.
+   */
+  const provisionedWallet = useRef<string | null>(null);
+  useEffect(() => {
+    const address = solanaWallet?.address;
+    if (!dynamicUser || !address || provisionedWallet.current === address) return;
+
+    provisionedWallet.current = address;
+    void provisionSessionUser({
+      wallet: address as string,
+      handle: dynamicUser.username ?? null,
+      name:
+        [dynamicUser.firstName, dynamicUser.lastName].filter(Boolean).join(' ') || null,
+      email: dynamicUser.email ?? null,
+      phone: dynamicUser.phoneNumber ?? null,
+      country: dynamicUser.country ?? null,
+      language,
+    }).catch((error: unknown) => {
+      // A failure here is not fatal: the app still works from the chain, and
+      // the next sign-in retries. But it is worth saying out loud, because a
+      // silent failure looks exactly like a broken app.
+      console.warn('[api] the ledger row could not be created yet', error);
+    });
+  }, [dynamicUser, solanaWallet, language]);
 
   // The webhook lands seconds after the send, so poll the local feed while the
   // app is open: both the transcript and the bell then update without a manual

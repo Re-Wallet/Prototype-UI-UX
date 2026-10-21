@@ -37,6 +37,12 @@ declare global {
     interface Request {
       /** The verified session. Present only after `requireSession` ran. */
       session?: DynamicSessionClaims;
+      /**
+       * The wallet the request named, once `requireOwnedWallet` proved the
+       * session controls it. The handler reads it from here instead of
+       * re-reading the body, so the value that was checked is the value used.
+       */
+      sessionWallet?: string;
     }
   }
 }
@@ -143,6 +149,9 @@ export function requireOwnedWallet(read: (req: Request) => unknown): RequestHand
       res.status(403).json({ error: 'This session does not control that wallet.' });
       return;
     }
+
+    // The handler reads the checked value from here, not from the body.
+    req.sessionWallet = wallet;
 
     next();
   };
