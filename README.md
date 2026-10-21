@@ -261,6 +261,33 @@ rolldown.
 Users must exist in the local `users` table (seeded) for the webhook to
 project their movements — see [Known limitations](#known-limitations).
 
+### Neon setup (required)
+
+The ledger runs on **Neon Postgres** and the UI learns about changes over
+**Neon Realtime** (logical replication over WebSocket).
+
+1. `DATABASE_URL` (pooled) and `DATABASE_URL_UNPOOLED` (direct, for Drizzle
+   Kit) — the direct endpoint is the one migrations and `db:push` need.
+2. Apply the schema: `npm run db:push` (or `npm run db:migrate`).
+3. **Create the Realtime publication.** Without it there is nothing to
+   subscribe to, and the app silently falls back to polling: the balance
+   looks live but no change is ever pushed.
+
+   ```sql
+   CREATE PUBLICATION neon_realtime FOR TABLE
+     transactions, payment_links, users, notifications;
+   ```
+
+   `SHOW wal_level;` must answer `logical`. The publication lives in the
+   database, not in this repository: recreate it on every new branch.
+4. Realtime credentials: `NEON_REALTIME_URL`, `NEON_REALTIME_SECRET`,
+   `NEON_REALTIME_DB` and `VITE_NEON_REALTIME_URL` (the client URL).
+
+> **The publication is the piece that is easy to miss.** A missing one does
+> not fail loudly: the app keeps working, it just stops being real-time and
+> falls back to the 20-second poll — which looks alive until you are waiting
+> for a charge to settle.
+
 ---
 
 ## Architecture

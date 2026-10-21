@@ -233,6 +233,14 @@ function WalletApp() {
       );
       // A newer refresh started meanwhile: this answer is stale, drop it.
       if (ticket !== transactionsSeqRef.current) return;
+
+      // The charges still waiting to be paid. They ride the same round trip
+      // as the movements, and the silent path refreshes them too: Realtime
+      // is the fast lane, this poll is the floor under it.
+      const links = await fetchPaymentLinks(solanaWallet.address as string);
+      if (ticket !== transactionsSeqRef.current) return;
+      if (links) setPaymentLinks(links);
+
       if (silent) {
         if (dbTransactions) {
           setTransactions((current) => mergeTransactionLists(current, dbTransactions));
@@ -245,13 +253,6 @@ function WalletApp() {
       if (ticket !== transactionsSeqRef.current) return;
       setTransactions((current) => mergeTransactionLists(current, sourceTransactions));
       setTransactionsError(null);
-
-      // The charges still waiting to be paid, in the same round trip as the
-      // movements: the list shows them as pending and drops them the moment
-      // the webhook settles one.
-      const links = await fetchPaymentLinks(solanaWallet.address as string);
-      if (ticket !== transactionsSeqRef.current) return;
-      if (links) setPaymentLinks(links);
     } catch (error) {
       if (!silent) setTransactionsError(error instanceof Error ? error.message : String(error));
     } finally {
