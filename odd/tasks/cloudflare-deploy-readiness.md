@@ -323,6 +323,46 @@ a real blocker moves the code, and the rest is documented rather than chased.
 **After the third round**: `npm test` → **119 tests, 119 pass, 0 fail**,
 `npm run lint` → clean.
 
+### Progress — 2026-10-21 (work unit 5 closed — the review is approved)
+
+The corrected candidate was recovered into a fresh lineage (the commit had
+been amended, so the provider authorised a `scope_changed` recovery) and
+reviewed with the four lenses. **Result: approved**, and the acknowledgement
+burned the authority (`gentle-ai.review-acknowledged/v1`, `authority: burned`).
+
+Five advisory findings came back as **informational** — they open no
+correction, they do not reopen the review, and the provider says so
+explicitly: *"Treat them as separate later work, never as a reason to re-run
+review on this candidate."* They are listed here so they are not lost:
+
+| Finding | Severity | Note |
+|---|---|---|
+| R2-RATELIMIT_SWEEP_COMMENT | WARNING | The comment says both loops "remove what the table grew"; the sweep is capped at 64, so it may leave expired callers behind when there are many. The wording overstates it |
+| R3-001 | WARNING | `fetchTimeoutMs` has no **upper** bound: an enormous value effectively disables the timeout |
+| R3-002 | WARNING | `pruneExpiredCallers` is exported and its correctness depends on the least-recently-seen ordering, which is not checked at runtime |
+| R3-003 | SUGGESTION | The timeout error reports the adjusted value, so a caller that passed `0` sees "100ms" |
+| R3-004 | SUGGESTION | `pruneExpiredCallers` is exported mainly for testing; it could stay internal |
+
+**The work unit is closed.** `npm test` → **119 tests, 119 pass, 0 fail**;
+`npm run lint` → clean; the native review is approved and acknowledged.
+
+### Where the whole change landed
+
+| Commit | What |
+|---|---|
+| `5c53aa3` | the deployment runbook and the local team workflow in the README |
+| `74d020f` | the Dynamic session verification and the wallet gate |
+| `6c4d0b0` | the CORS allowlist, the rate limiter and the security headers |
+| `fc54bec` | the wiring: 13 gated routes, the identity endpoint, the client credential |
+| `84be1ce` | the first corrections: the exact environment binding, the cached key set, the amortized eviction |
+| `558230a` | the second corrections: the bounded fetch, the idle-caller release |
+
+**What is NOT done, on purpose**: the Workers port itself (Fase 1), the Cron
+sweeper with its batch cursor, `wrangler.toml`, CI, the custom domain, and
+the deployment. Those are documented in the README and planned. The advisory
+findings above are later work, not a reason to re-run this review.
+
+
 
 
 
