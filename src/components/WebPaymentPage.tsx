@@ -451,8 +451,8 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             ) : (
               <SignInScreen
                 compact
-                title="Necesitás una wallet para pagar"
-                subtitle="Ingresá con tu email y creamos tu wallet Solana en segundos."
+                title="Necesitas una billetera para pagar"
+                subtitle="Ingresa con tu mail y creamos una billetera en segundos"
               />
             )}
           </div>
