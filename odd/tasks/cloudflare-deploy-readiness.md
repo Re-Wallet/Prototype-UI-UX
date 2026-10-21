@@ -730,3 +730,28 @@ in Node:
 - **The public devnet RPC is already rate-limiting** (the sweep came back
   `rateLimited` on its first run). The provider's endpoint is not optional
   for a cohort, it is the price of admission.
+
+
+### Incident — 2026-10-21 (a local secret reached the public repository)
+
+While preparing the local Worker secrets, a `.dev.vars` file with the real
+credentials was committed and pushed to a **public** repository, and the
+Worker bundle (`.wrangler/tmp`) went with it. Both were removed from the
+history and the branch was force-pushed, but a pushed secret is exposed the
+moment it lands: removing it does not un-expose it.
+
+**What was done**
+
+- The `neondb_owner` password of the ledger was **rotated** and the local
+  files updated. The old password is dead.
+- `.dev.vars` and `.wrangler/` are now in `.gitignore`, and the history was
+  rewritten so neither is in the branch.
+- The `DYNAMIC_WEBHOOK_SECRET` was exposed too and **cannot be rotated
+  from here**: it is generated in Dynamic's dashboard. It has to be
+  regenerated there and re-entered with `wrangler secret put
+  DYNAMIC_WEBHOOK_SECRET` before the deployment is used for real.
+
+**The lesson, recorded because it is the kind of mistake that repeats**: a
+file that holds a credential never goes near a `git add -A`, and a public
+repository turns a local mistake into an incident. The `.gitignore` entries
+exist now so the second one cannot happen.
