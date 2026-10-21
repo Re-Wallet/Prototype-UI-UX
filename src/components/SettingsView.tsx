@@ -23,11 +23,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     <div className="h-full flex flex-col px-5 pt-3 pb-8 text-white select-none overflow-y-auto">
       {/* First Div: Profile Avatar, Name, and Tag */}
       <div className="flex flex-col items-center justify-center p-6 rounded-3xl bg-[#18181b] border border-white/5 mb-5 text-center">
-        <div className="w-18 h-18 rounded-full bg-[#ff1f71] flex items-center justify-center text-white text-3xl font-bold shadow-lg shadow-[#ff1f71]/20 mb-3 select-none">
-          {dynamicEmail?.charAt(0).toUpperCase() ?? 'D'}
-        </div>
+        <img
+          src="/avatar_perfil.png"
+          alt="Avatar del perfil"
+          className="w-18 h-18 rounded-full object-cover shadow-lg shadow-[#ff1f71]/20 mb-3 select-none"
+        />
         <h2 className="text-lg font-bold text-white leading-tight mb-0.5">
-          Cuenta Dynamic
+          Cuenta Anonymus
         </h2>
         <span className="text-xs font-semibold text-[#ff5a1f] font-mono">{dynamicEmail ?? 'Email no disponible'}</span>
       </div>
@@ -43,7 +45,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <span className="text-xs font-semibold text-white font-mono">{dynamicEmail ?? 'No disponible'}</span>
         </div>
 
-        {/* Dynamic embedded Solana wallet */}
+        {/* Solana wallet embebida */}
         <div className="p-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 text-zinc-400">
             <Wallet className="w-4 h-4 text-[#ff5a1f]" />

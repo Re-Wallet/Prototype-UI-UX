@@ -378,7 +378,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
                   {isPaying ? 'Firmando y enviando…' : `Pagar ${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'} USDC`}
                 </button>
                 <p className="mt-4 text-center text-xs leading-5 text-zinc-400">
-                  La transferencia se firma con tu wallet Dynamic. También necesitas SOL de {intent.cluster} para la comisión.
+                  La transferencia se firma con tu wallet Anonymus. También necesitas SOL de {intent.cluster} para la comisión.
                 </p>
               </>
             ) : (

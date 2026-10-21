@@ -52,7 +52,7 @@ function WalletSetupScreen({
           : <Wallet className="h-8 w-8" />}
       </div>
       <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-[#ff5a1f]">
-        Dynamic · Solana
+        Anonymus · Solana
       </p>
       <h1 className="mb-3 text-2xl font-bold text-white">
         {title}
@@ -125,7 +125,7 @@ export function DynamicAccountGate({ children }: { children: ReactNode }) {
       <EntryFrame>
         <div className="flex h-full items-center justify-center gap-3 text-sm text-zinc-400">
           <LoaderCircle className="h-5 w-5 animate-spin text-[#ff5a1f]" />
-          Connecting to Dynamic…
+          Conectando…
         </div>
       </EntryFrame>
     );

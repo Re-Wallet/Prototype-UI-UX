@@ -287,7 +287,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
             </div>
           </div>
           <p className="mt-2 text-xs text-zinc-400">
-            La wallet Dynamic firmará un envío de USDC en {chain.describeNetwork()}. Revisa cuidadosamente la dirección.
+            La wallet Anonymus firmará un envío de USDC en {chain.describeNetwork()}. Revisa cuidadosamente la dirección.
           </p>
           {sendError && <p role="alert" className="mt-3 text-xs text-red-400">{sendError}</p>}
 

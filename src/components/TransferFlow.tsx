@@ -527,7 +527,7 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
             Envío aprobado
           </h2>
           <p className="text-sm text-zinc-400 mb-6">
-            La transacción fue firmada con tu wallet Solana creada por Dynamic. Espera la confirmación de la red.
+            La transacción fue firmada con tu wallet Solana creada por Anonymus. Espera la confirmación de la red.
           </p>
 
           <div className="w-full max-w-xs p-4 rounded-2xl bg-[#1e1e21] border border-white/5 mb-4 text-left space-y-2">
