@@ -9,6 +9,7 @@ import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 import { X } from 'lucide-react';
 import { Header } from './components/Header';
 import { BalanceCard } from './components/BalanceCard';
+import { SolanaAssetsCard } from './components/SolanaAssetsCard';
 import { RecentTransactions } from './components/RecentTransactions';
 import { BottomNav, NavTab } from './components/BottomNav';
 import { DepositFlow } from './components/DepositFlow';
@@ -20,9 +21,12 @@ import { TransactionReceiptModal } from './components/TransactionReceiptModal';
 import { NotificationToast, ToastData } from './components/NotificationToast';
 import { NotificationsView } from './components/NotificationsView';
 import { QrScannerFlow } from './components/QrScannerFlow';
+import { HomeSurveyCard } from './components/HomeSurveyCard';
+import { HomeSurveyModal } from './components/HomeSurveyModal';
 import { PhoneFrame } from './components/PhoneFrame';
 import { Transaction } from './types/wallet';
 import { Language, translations } from './i18n/translations';
+import { surveyCopy } from './i18n/surveyCopy';
 import { getStoredLanguage, storeLanguage, subscribeLanguage } from './i18n/language';
 import { DynamicAccountGate } from './components/DynamicAccountGate';
 import { assetBySymbol, chain, type Address } from './adapters';
@@ -101,6 +105,21 @@ function WalletApp() {
   const [unreadNotifications, setUnreadNotifications] = useState<number>(0);
   const [isNotificationsLoading, setIsNotificationsLoading] = useState(true);
 
+  /**
+   * Request sequence counters.
+   *
+   * The balance and the transaction list are refreshed from three concurrent
+   * sources (mount, Realtime, and the completion of a transfer). A response
+   * carries no ordering guarantee, so a request that started BEFORE a newer
+   * one can resolve AFTER it and overwrite fresher values — leaving the user
+   * looking at the pre-transfer balance right after they sent money.
+   *
+   * Each refresh takes a ticket; a response is applied only if no newer
+   * request has been issued in the meantime.
+   */
+  const balanceSeqRef = useRef(0);
+  const transactionsSeqRef = useRef(0);
+
   const refreshBalance = useCallback(async (options?: { fresh?: boolean }) => {
     if (!solanaWallet) {
       setBalance(0);
@@ -111,6 +130,7 @@ function WalletApp() {
       return;
     }
 
+    const ticket = ++balanceSeqRef.current;
     setIsBalanceLoading(true);
 
     // Server first: the local API reads the chain through one paced, cached
@@ -122,6 +142,8 @@ function WalletApp() {
       solanaWallet.address as string,
       options?.fresh === true
     );
+    // A newer refresh started meanwhile: this answer is stale, drop it.
+    if (ticket !== balanceSeqRef.current) return;
     if (remote) {
       setBalance(remote.usdc);
       setSolBalance(remote.sol);
@@ -141,6 +163,8 @@ function WalletApp() {
       chain.getBalance(solanaWallet.address as Address, usdc),
       chain.getSolBalance(solanaWallet.address as Address),
     ]);
+    // Same rule as the server path: a newer refresh started meanwhile.
+    if (ticket !== balanceSeqRef.current) return;
     if (usdcResult.status === 'fulfilled') {
       setBalance(usdcResult.value.ui);
       setBalanceError(null);
@@ -164,6 +188,8 @@ function WalletApp() {
       return;
     }
 
+    const ticket = ++transactionsSeqRef.current;
+
     // A background poll must not flash the loading state over data already on
     // screen, and must not fall back to the rate-limited RPC path: it reads the
     // local DB only and leaves the current list untouched on failure.
@@ -175,6 +201,8 @@ function WalletApp() {
       const dbTransactions = await fetchWalletTransactions(
         solanaWallet.address as string
       );
+      // A newer refresh started meanwhile: this answer is stale, drop it.
+      if (ticket !== transactionsSeqRef.current) return;
       if (silent) {
         if (dbTransactions) {
           setTransactions((current) => mergeTransactionLists(current, dbTransactions));
@@ -184,12 +212,13 @@ function WalletApp() {
       const sourceTransactions =
         dbTransactions ?? (await getWalletTransactions(solanaWallet.address as Address));
 
+      if (ticket !== transactionsSeqRef.current) return;
       setTransactions((current) => mergeTransactionLists(current, sourceTransactions));
       setTransactionsError(null);
     } catch (error) {
       if (!silent) setTransactionsError(error instanceof Error ? error.message : String(error));
     } finally {
-      if (!silent) setIsTransactionsLoading(false);
+      if (!silent && ticket === transactionsSeqRef.current) setIsTransactionsLoading(false);
     }
   }, [solanaWallet?.address]);
 
@@ -285,6 +314,10 @@ function WalletApp() {
   // Modals & Sheets
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [toast, setToast] = useState<ToastData | null>(null);
+
+  // The in-app survey: a card on the home screen that opens the questions.
+  const [isSurveyOpen, setIsSurveyOpen] = useState<boolean>(false);
+  const [isSurveyDone, setIsSurveyDone] = useState<boolean>(false);
 
   // Helpers
   const showToast = (title: string, message: string, amount?: number) => {
@@ -433,7 +466,7 @@ function WalletApp() {
             >
               <X className="w-4 h-4" />
             </button>
-            <h1 className="text-[17px] font-semibold text-white tracking-tight">Perfil</h1>
+            <h1 className="text-lg font-semibold text-white tracking-tight">Perfil</h1>
             <div className="w-8" />
           </div>
           <div className="flex-1 min-h-0">
@@ -491,7 +524,6 @@ function WalletApp() {
 
         <BalanceCard
           balance={balance}
-          solBalance={solBalance}
           balanceLoading={isBalanceLoading}
           isBalanceHidden={isBalanceHidden}
           onDeposit={() => setActiveFlow('deposit')}
@@ -514,11 +546,24 @@ function WalletApp() {
           </p>
         )}
 
+        <HomeSurveyCard
+          copy={surveyCopy[language]}
+          onStart={() => setIsSurveyOpen(true)}
+          completed={isSurveyDone}
+        />
+
+        <SolanaAssetsCard
+          balance={balance}
+          solBalance={solBalance}
+          balanceLoading={isBalanceLoading}
+          isBalanceHidden={isBalanceHidden}
+          t={t}
+        />
+
         <RecentTransactions
           transactions={transactions}
           onSelectTransaction={(tx) => setSelectedTransaction(tx)}
           onSeeAll={() => setActiveTab('activity')}
-          onRefresh={() => void refreshTransactions()}
           t={t}
           loading={isTransactionsLoading}
           error={transactionsError}
@@ -563,6 +608,26 @@ function WalletApp() {
                 transaction={selectedTransaction}
                 onClose={() => setSelectedTransaction(null)}
                 userEmail={dynamicUser?.email ?? null}
+              />
+            )}
+
+            {/* The survey - also inside the phone interface, over the home */}
+            {isSurveyOpen && (
+              <HomeSurveyModal
+                copy={surveyCopy[language]}
+                identity={{
+                  email: dynamicUser?.email,
+                  firstName: dynamicUser?.firstName,
+                  lastName: dynamicUser?.lastName,
+                }}
+                onClose={() => {
+                  setIsSurveyOpen(false);
+                  // Closing hands the card its CTA back. The answers are not
+                  // persisted yet, so the next survey starts from scratch —
+                  // no page reload needed to answer again.
+                  setIsSurveyDone(false);
+                }}
+                onSubmitted={() => setIsSurveyDone(true)}
               />
             )}
           </div>
