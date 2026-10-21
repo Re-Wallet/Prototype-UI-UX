@@ -42,6 +42,7 @@ import {
   upsertContactByPubkey,
 } from './src/services/wallet';
 import { assetBySymbol, chain, confirmTransferToRecipient, type Address } from './src/adapters';
+import type { TransferVerdict } from './src/adapters/payment-verify';
 import { getBalances } from './src/services/balanceCache';
 import { cacheKey, getCached } from './src/services/readCache';
 import { getUserIdByPubkey } from './src/services/userCache';
@@ -861,6 +862,12 @@ app.post('/api/payment-links/claim', claimRateLimit, async (req: Request, res: R
   if (link.status !== 'active') {
     return res.status(409).json({ error: 'El enlace ya no está disponible.' });
   }
+  // An expired link is not payable. The status stays `active` until the
+  // sweeper sweeps it, so the expiry has to be checked here: without it a
+  // payer could settle a charge the merchant had already given up on.
+  if (link.expiresAt && link.expiresAt.getTime() <= Date.now()) {
+    return res.status(409).json({ error: 'El enlace expiró.' });
+  }
   if (link.amountUsdc === null) {
     return res.status(409).json({ error: 'El enlace no tiene un monto fijo.' });
   }
@@ -878,7 +885,7 @@ app.post('/api/payment-links/claim', claimRateLimit, async (req: Request, res: R
   // with a growing delay — a rate-limited read is NOT the same as a
   // transaction that does not exist, and treating it as one would abandon
   // a perfectly good payment.
-  let verdict: 'confirmed' | 'not-found' | 'mismatch' = 'not-found';
+  let verdict: TransferVerdict = 'not-found';
   let transientFailures = 0;
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
@@ -897,7 +904,10 @@ app.post('/api/payment-links/claim', claimRateLimit, async (req: Request, res: R
     } catch {
       transientFailures += 1;
     }
-    if (verdict !== 'not-found') break;
+    // A transaction that is not visible yet, or that is visible but only
+    // `processed`, can still become a payment. A mismatch cannot: it is
+    // either the wrong recipient, the wrong mint, or the wrong amount.
+    if (verdict === 'confirmed' || verdict === 'mismatch') break;
     await new Promise((resolve) => setTimeout(resolve, 500 + attempt * 500));
   }
 
@@ -908,6 +918,13 @@ app.post('/api/payment-links/claim', claimRateLimit, async (req: Request, res: R
   }
 
   if (verdict !== 'confirmed') {
+    if (verdict === 'not-confirmed') {
+      // The money is on its way. Say so, and say it in a way the payer can
+      // act on: this is not a rejection, it is a wait.
+      return res.status(409).json({
+        error: 'La transaccion todavia no esta confirmada. Reintenta en un momento.',
+      });
+    }
     return res.status(verdict === 'not-found' ? 409 : 422).json({
       error:
         verdict === 'not-found'

@@ -221,6 +221,16 @@ async function inspectTransaction(
 }
 
 /**
+ * What the chain says about a transaction.
+ *
+ * `not-confirmed` is its own verdict, not a flavour of `mismatch`: a
+ * transaction that is only `processed` may still be dropped by the cluster,
+ * so the caller must WAIT for it rather than tell the payer it does not
+ * match.
+ */
+export type TransferVerdict = 'confirmed' | 'not-found' | 'not-confirmed' | 'mismatch';
+
+/**
  * Confirm that `signature` moved at least `expectedAmount` of `asset` INTO
  * `recipient`.
  *
@@ -232,6 +242,7 @@ async function inspectTransaction(
  * Returns:
  *   - `confirmed` — the recipient's token account received the amount.
  *   - `not-found` — the transaction is not visible yet (it may be too fresh).
+ *   - `not-confirmed` — the transaction is visible but is only `processed`.
  *   - `mismatch` — the transaction is visible but the payment does not match
  *     (wrong recipient, wrong amount, or a failed transaction).
  */
@@ -240,7 +251,7 @@ export async function confirmTransferToRecipient(
   recipient: Address,
   asset: TokenAsset,
   expectedAmount: number
-): Promise<'confirmed' | 'not-found' | 'mismatch'> {
+): Promise<TransferVerdict> {
   const ata = await deriveAta(recipient, asset);
   const transfer = await inspectTransaction(signature, ata, asset);
 
@@ -248,6 +259,17 @@ export async function confirmTransferToRecipient(
   if (!transfer) return 'not-found';
   if (transfer.error) return 'mismatch';
   if (transfer.mint !== asset.mint) return 'mismatch';
+
+  // A transaction that is only `processed` can still be dropped by the
+  // cluster, so it must not settle a link yet. The caller waits and asks
+  // again.
+  //
+  // The check only fires when the RPC actually reports the status. The public
+  // devnet endpoint omits `meta.confirmationStatus` for a confirmed
+  // transaction, and `getTransaction` defaults to the `finalized` commitment —
+  // so an absent status means "finalized by construction", not "unknown".
+  // Treating an absent status as unconfirmed would never settle a payment.
+  if (transfer.commitment === 'processed') return 'not-confirmed';
 
   const received = Number(transfer.delta) / 10 ** asset.decimals;
   // A tiny epsilon absorbs the float representation of the amount; the

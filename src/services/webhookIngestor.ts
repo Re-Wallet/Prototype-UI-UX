@@ -84,6 +84,15 @@ export function verifyDynamicSignature(
 // PAYLOAD TYPES (structural — only the fields the projection reads)
 // ============================================================================
 
+/**
+ * The largest transfer the ledger accepts.
+ *
+ * On devnet an amount this large is not a payment, it is a malformed
+ * payload. The bound keeps a bad number from becoming a row that looks
+ * real.
+ */
+const MAX_TRANSFER_AMOUNT = 1e12;
+
 export interface DynamicEnvelope {
   messageId: string;
   eventId?: string | null;
@@ -179,6 +188,12 @@ export function parseWalletActivity(data: unknown): DynamicWalletActivity | null
           const to = asString(transfer.toAddress);
           const amount = typeof transfer.amount === 'number' ? transfer.amount : null;
           if (!tokenAddress || !from || !to || amount === null) return null;
+          // A transfer amount is a positive, finite, bounded number. A zero, a
+          // negative, a NaN or an absurd value is a malformed payload, not a
+          // movement, and it must not become a row in the ledger.
+          if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_TRANSFER_AMOUNT) {
+            return null;
+          }
 
           const metadata = asRecord(transfer.metadata);
           return {
@@ -261,10 +276,19 @@ export async function recordWebhookDelivery(
   if (inserted.length > 0) return { id: inserted[0].id, duplicate: false };
 
   const [existing] = await db
-    .select({ id: webhookEventsTable.id })
+    .select({ id: webhookEventsTable.id, processedAt: webhookEventsTable.processedAt })
     .from(webhookEventsTable)
     .where(eq(webhookEventsTable.messageId, envelope.messageId))
     .limit(1);
+
+  // "Seen" is not "processed". A delivery whose projection never completed
+  // has to be projectable again: Dynamic redelivers, and the ledger upsert
+  // and the link settlement are both idempotent, so the retry converges.
+  // Treating an unprocessed delivery as a duplicate dropped the movement for
+  // good.
+  if (existing && !existing.processedAt) {
+    return { id: existing.id, duplicate: false };
+  }
 
   return { id: existing?.id ?? -1, duplicate: true };
 }

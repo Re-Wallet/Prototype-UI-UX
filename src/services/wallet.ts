@@ -23,7 +23,7 @@ import type {
 import type { Contact as UiContact, Transaction as UiTransaction } from '../types/wallet';
 
 import { mapTransaction, mapLiveTransactionRow, type LiveTransactionRow } from './transactionMapper';
-import { invalidateBalances } from './balanceCache';
+import { getBalances, invalidateBalances } from './balanceCache';
 import { cacheKey, invalidate } from './readCache';
 
 // ============================================================================
@@ -689,9 +689,18 @@ export async function getWalletSnapshot(userId: number): Promise<WalletSnapshot 
     listContacts(userId),
   ]);
 
+  // The balance comes from the chain, not from `users.balance_usdc`.
+  //
+  // Nothing in the server ever writes that column, so it stays at its
+  // default of zero, and a snapshot that says "0 USDC" for a wallet holding
+  // money is worse than no snapshot at all. The chain is the only source of
+  // truth for a balance — that is the same rule the ledger projection
+  // follows.
+  const balances = await getBalances(user.publicKey).catch(() => null);
+
   return {
     user: profile,
-    balance: profile.balanceUsdc,
+    balance: balances?.usdc ?? 0,
     transactions,
     contacts,
   };
