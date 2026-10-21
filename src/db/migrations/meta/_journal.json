@@ -8,6 +8,13 @@
       "when": 1792459255322,
       "tag": "0000_flawless_prowler",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792527132075,
+      "tag": "0001_blue_enchantress",
+      "breakpoints": true
     }
   ]
 }

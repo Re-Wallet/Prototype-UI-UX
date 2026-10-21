@@ -220,6 +220,42 @@ async function inspectTransaction(
   };
 }
 
+/**
+ * Confirm that `signature` moved at least `expectedAmount` of `asset` INTO
+ * `recipient`.
+ *
+ * This is the on-chain proof used when a payer declares which payment link
+ * it is settling: the reference does not travel on-chain, so the server has
+ * to check the chain itself that the money actually arrived at the link's
+ * recipient, in the amount the link asks for.
+ *
+ * Returns:
+ *   - `confirmed` — the recipient's token account received the amount.
+ *   - `not-found` — the transaction is not visible yet (it may be too fresh).
+ *   - `mismatch` — the transaction is visible but the payment does not match
+ *     (wrong recipient, wrong amount, or a failed transaction).
+ */
+export async function confirmTransferToRecipient(
+  signature: string,
+  recipient: Address,
+  asset: TokenAsset,
+  expectedAmount: number
+): Promise<'confirmed' | 'not-found' | 'mismatch'> {
+  const ata = await deriveAta(recipient, asset);
+  const transfer = await inspectTransaction(signature, ata, asset);
+
+  // Not visible yet, or the transaction does not touch this token account.
+  if (!transfer) return 'not-found';
+  if (transfer.error) return 'mismatch';
+  if (transfer.mint !== asset.mint) return 'mismatch';
+
+  const received = Number(transfer.delta) / 10 ** asset.decimals;
+  // A tiny epsilon absorbs the float representation of the amount; the
+  // comparison that matters is "at least what the link asks for".
+  if (received < expectedAmount - 0.000001) return 'mismatch';
+  return 'confirmed';
+}
+
 // ============================================================================
 // REFERENCE LOOKUP
 // ============================================================================

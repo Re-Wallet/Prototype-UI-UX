@@ -1,0 +1,1 @@
+ALTER TABLE "payment_links" ADD COLUMN "paid_tx_signature" text;

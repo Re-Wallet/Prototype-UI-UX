@@ -41,3 +41,36 @@ export function isThrottled(): boolean {
 export function currentRpcPaceMs(): number {
   return state.throttled ? THROTTLED_RPC_PACE_MS : BASE_RPC_PACE_MS;
 }
+
+// ---------------------------------------------------------------------------
+// PACING GATE
+// ---------------------------------------------------------------------------
+
+/**
+ * Serialize RPC reads behind one process-wide gate.
+ *
+ * The public devnet endpoint answers bursts with 429 and no `Retry-After`, so
+ * every RPC read in the process has to share one measured budget. The balance
+ * cache has its own gate; this is the shared one for the paths outside it
+ * (the payment-link claim and the signature ownership check).
+ *
+ * At most one call is in flight and consecutive calls are spaced by the
+ * current pace, which widens once the limiter has been observed.
+ */
+let lastRpcAt = 0;
+let rpcTail: Promise<unknown> = Promise.resolve();
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+export function pacedRpc<T>(read: () => Promise<T>): Promise<T> {
+  const run = rpcTail.then(async () => {
+    const wait = lastRpcAt + currentRpcPaceMs() - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastRpcAt = Date.now();
+    return read();
+  });
+  // The chain stays alive even when a read rejects, so one failed call never
+  // blocks the next one.
+  rpcTail = run.catch(() => undefined);
+  return run as Promise<T>;
+}

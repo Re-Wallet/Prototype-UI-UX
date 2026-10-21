@@ -73,6 +73,7 @@ import {
   watchTokenAccount,
   meetsCommitment,
   createInMemoryLedger,
+  confirmTransferToRecipient,
 } from './payment-verify';
 
 // ============================================================================
@@ -129,6 +130,7 @@ export const chain = {
 
   // --- Streaming ----------------------------------------------------------
   watchTokenAccount,
+  confirmTransferToRecipient,
 
   // --- Guards -------------------------------------------------------------
   meetsCommitment,
@@ -161,6 +163,7 @@ export type {
 };
 
 export { assetBySymbol };
+export { confirmTransferToRecipient };
 export { assetByMint };
 
 export { amountFromBase, amountFromUi, rpc, rpcSubscriptions };

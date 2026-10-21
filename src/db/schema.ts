@@ -139,6 +139,16 @@ export const paymentLinks = pgTable(
     paidAt: timestamp('paid_at', { withTimezone: true }),
     paidByPubkey: text('paid_by_pubkey'),
     paidTxId: integer('paid_tx_id'),
+    /**
+     * Signature of the transaction that settled this link.
+     *
+     * It is the idempotency key between the two settlement paths: the payer
+     * declares the link it is paying (the reference does not travel
+     * on-chain), and the webhook later arrives for the same transfer. Without
+     * this column the webhook would look for "some active link of this
+     * amount" and could settle a DIFFERENT one — a second, wrong link.
+     */
+    paidTxSignature: text('paid_tx_signature'),
 
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     metadataJson: jsonb('metadata_json'),
