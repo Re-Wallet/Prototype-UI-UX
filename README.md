@@ -14,10 +14,17 @@ WebSocket): the database tells the UI *when* to look, and the chain still tells
 it *how much*. Everything runs against **Solana devnet** (test tokens, no real
 value).
 
-> **Status:** functional prototype heading to private beta. The ledger already
-> runs on PostgreSQL (Neon) with real-time propagation; a background sweeper
-> reconciles any movement the webhook missed — see
-> [Roadmap to beta](#roadmap-to-beta).
+> **Status:** hackathon prototype of a consumer payments app, running end to
+> end on **Solana devnet** against real infrastructure — Dynamic embedded
+> wallets, a PostgreSQL ledger on Neon, and live row changes over Neon
+> Realtime. Sign-up, charging, paying, depositing, withdrawing, history,
+> receipts, notifications and balances all work; a background sweeper
+> reconciles any movement the webhook missed. The in-app survey is collected
+> but not persisted yet — see [Roadmap](#roadmap-to-beta).
+>
+> A public landing page lives in [`landing/`](landing/): the product story,
+> live Dynamic metrics, FAQ, and a **"Quiero ser partner"** call to action
+> that books a courtesy meeting.
 
 ---
 
@@ -58,7 +65,10 @@ wallet.
 
 **User flow**
 
-1. Open the link / scan the QR → `/pay` → sign in with email OTP.
+1. Open the link / scan the QR → `/pay`. **The page is public**: a payer
+   opens it on another device, without an account, and sees the request —
+   never a login wall. To pay, the page asks for an email code inline and
+   creates the payer's embedded wallet on the spot.
 2. The page shows: **Pagar a** (the collector's registered email, falling back
    to a shortened address), **Cadena/Moneda** (`Solana/USDC`), and the amount —
    a centered **USD {amount}** figure for fixed charges, an input for
@@ -122,6 +132,42 @@ at every entry point).
 `src/components/QrScannerFlow.tsx` (`mode="address"`),
 `POST /api/wallet/transactions/pending`.
 
+### Encuesta — Conocernos en 30 segundos
+
+The home screen carries a short, anonymous survey: four questions about what
+the user does with their dollars today, what stops them from using crypto
+wallets, and how much they would move in the first month. It is the fastest
+way to learn who the product is for — and it runs where the user already is:
+one tap on the home card, one screen, done.
+
+**User flow**
+
+1. Home → the **ANONYMOUS** card (*Tell us about you & your needs*).
+2. Tap **Answer** → the four questions open on a single scrollable screen —
+   no wizard, no page turns. Q1 and Q3 take one option, Q2 accepts several,
+   Q4 is optional.
+3. **Send answers** → a thank-you state. The card stays enabled, so the
+   survey can be answered again without reloading the app.
+
+**How it is built**
+
+| Step | Code |
+|------|------|
+| Answer keys, required questions, wire payload | `src/services/survey.ts` |
+| Home card + single-screen sheet | `src/components/HomeSurveyCard.tsx`, `src/components/HomeSurveyModal.tsx` |
+| ES/EN copy | `src/i18n/surveyCopy.ts` |
+| Storage | `POST /api/landing/survey` → `landing_survey_responses` |
+
+The answers belong to the account that is already signed in — the email comes
+from the session, the user never types it — but the survey never touches the
+balance, the wallet address, or the transaction history. The payload is
+already shaped exactly like the endpoint body, so turning persistence on is a
+single call inside `submitSurvey()`.
+
+> **Not persisted yet.** The prototype collects and validates the answers in
+> the UI; `submitSurvey()` logs the payload instead of posting it. The
+> endpoint and the table are already in place.
+
 ### Also in the app
 
 | Feature | Where | Notes |
@@ -132,6 +178,7 @@ at every entry point).
 | **Actividad** | `AllTransactionsModal` | Full history from the local ledger (RPC fallback) |
 | **Perfil** | `SettingsView` | Email, wallet, language toggle (ES/EN), logout pinned at the bottom |
 | **Onboarding** | `DynamicAccountGate` | Email OTP + language picker; embedded Solana wallet created by Dynamic |
+| **Reportar un problema** | `BugReportButton` + `BugReportSheet` | Floating entry on every screen: describes the issue and opens a pre-filled GitHub issue (title, body, `bug` label) with the build, platform, network and wallet attached |
 
 ---
 
@@ -292,6 +339,10 @@ not remove the need for SOL.
 ## Project layout
 
 ```
+landing/                        # public marketing site (static, no build step)
+│   ├── index.html              # hero, metrics, features, FAQ, partner CTA
+│   ├── script.js               # metrics, headline rotator, demo button
+│   └── style.css               # the whole visual system
 server.ts                       # Express API: webhook, wallet, sweeper, SPA host
 drizzle.config.ts               # Drizzle Kit (PostgreSQL dialect)
 neon.ts                         # Realtime config (allowed origins)
@@ -304,14 +355,22 @@ src/
 │   ├── dynamic-network.ts      # Dynamic vs app cluster alignment (fails closed)
 │   └── payment-verify.ts       # reference lookup, receipt verification
 ├── components/                 # screens (see Product features)
-│   └── LiveTransactionsBridge.tsx  # Neon Realtime → React query invalidation
+│   ├── LiveTransactionsBridge.tsx  # Neon Realtime → React query invalidation
+│   ├── HomeSurveyCard.tsx     # the survey card on the home screen
+│   ├── HomeSurveyModal.tsx    # the survey, four questions on one screen
+│   ├── BugReportButton.tsx    # floating "report a problem" entry
+│   ├── BugReportSheet.tsx     # the report form → a pre-filled GitHub issue
+│   ├── DynamicSignIn.tsx      # email OTP sign-in (full screen or inline)
+│   └── SolanaAssetsCard.tsx   # the SOL/USDC breakdown of the balance
 ├── contracts/                  # pure types + mint registry (no SDK imports)
 ├── db/
-│   ├── schema.ts               # 10 tables (ledger projection + app data)
+│   ├── schema.ts               # 12 tables (ledger projection + app data)
 │   ├── index.ts                # pg pool connection
 │   └── migrations/             # generated SQL (committed)
 ├── i18n/
 │   ├── translations.ts         # ES/EN strings
+│   ├── surveyCopy.ts           # ES/EN copy for the survey flow
+│   ├── bugReportCopy.ts        # ES/EN copy for the bug report flow
 │   └── language.ts             # persisted language (gate ↔ app)
 ├── services/
 │   ├── walletApi.ts            # UI → API client (fail-soft)
@@ -324,6 +383,9 @@ src/
 │   ├── realtimeClient.ts       # browser Realtime client
 │   ├── historySync.ts          # sweeper: on-chain history → ledger
 │   ├── webPaymentLink.ts       # /pay URL build/parse
+│   ├── survey.ts               # in-app survey: answer keys, validation, wire payload
+│   ├── bugReport.ts            # in-app bug report: GitHub issue payload
+│   ├── dynamicWallet.ts        # ensures the signed-in account owns a Solana wallet
 │   └── solanaHistory.ts        # paginated RPC history (fallback/backfill source)
 └── App.tsx                     # navigation + screen orchestration
 ```
@@ -348,7 +410,7 @@ provided by Neon.
 | `notifications` | In-app feed rows, linked to transactions |
 | `webhook_events` | Raw webhook deliveries, deduped on Dynamic's `message_id` |
 | `contacts` | Per-user address book |
-| `payment_links` | Charge links (schema ready; see limitations) |
+| `payment_links` | Charge links: one row per charge, with the on-chain reference, settled exactly once |
 | `qr_scans` | Scanned-QR tracking |
 | `user_settings` | Language/currency/security (1:1) |
 | `fiat_rates` | USDC → fiat history |
@@ -401,7 +463,7 @@ app keeps working on-chain data alone.
 | GET | `/api/wallet/identity?address=` | Registered email/handle for a pubkey |
 | PATCH | `/api/settings/language` | Persist the user's language |
 | GET | `/api/landing/metrics` | Landing metric strip: cached Dynamic topline (users/wallets/sessions) |
-| POST | `/api/landing/survey` | Landing opinion form: stores a survey response (name, lastName, email, q1..q4) |
+| POST | `/api/landing/survey` | Stores a survey response (name, lastName, email, q1..q4). The form now lives in the app (home screen), not in the landing. |
 
 ## Environment
 
@@ -451,8 +513,7 @@ DYNAMIC_METRICS_TTL_MS=300000       # landing metrics snapshot TTL
 DYNAMIC_ENVIRONMENT_ID=             # default: VITE_DYNAMIC_ENVIRONMENT_ID
 ```
 
-> **`.env.example` is out of date** (it still carries template variables).
-> Copy the block above instead.
+`.env.example` mirrors this block. Copy it and fill the values in.
 
 ## Scripts
 
@@ -471,9 +532,9 @@ DYNAMIC_ENVIRONMENT_ID=             # default: VITE_DYNAMIC_ENVIRONMENT_ID
 
 Deliberate prototype constraints — tracked, not accidental:
 
-- **Links are replayable.** `/pay` carries recipient/mint/cluster/amount/message
-  but no reference or expiry; nothing binds a link to a single settlement.
-  `payment_links` is modelled in the schema for the beta fix.
+- **The survey is not persisted yet.** The answers are collected and validated
+  in the app, but `submitSurvey()` only logs them; the POST to
+  `/api/landing/survey` is the one call that turns it on.
 - **Sweeper is a reconciliation job.** The ledger updates itself through the
   webhook and Neon Realtime; the sweeper (300 s, adaptive backoff) exists to
   repair a missed delivery, not to drive the UI.
@@ -481,9 +542,6 @@ Deliberate prototype constraints — tracked, not accidental:
   rate-limited and have no SLA (the sweeper backs off on 429).
 - **i18n is partial.** Onboarding, home chrome, and settings are ES/EN;
   several flows hardcode Spanish.
-- **`npm test` fails on Node 22.21** before loading any test file
-  (`Missing internal module 'internal/deps/brace-expansion'`) — pre-existing
-  runner issue, unrelated to application code.
 
 ## Roadmap to beta
 
@@ -497,10 +555,14 @@ product loop before infrastructure work. The path to the first beta users:
 3. ~~**User registration at sign-up**~~ — **done:** the `users` row is created
    on first Dynamic login, so every account is projectable by the webhook
    from day one.
-4. **Single-use payment links** — persist `payment_links` with an on-chain
-   reference per charge so a link settles once and reconciles exactly.
-5. **Fee abstraction** — sponsor the network fee so payers can settle in
-   USDC without holding SOL (rent remains payer-funded by design).
+4. ~~**Single-use payment links**~~ — **done:** every charge persists a
+   `payment_links` row with its on-chain reference, and the link settles
+   exactly once; the webhook and the sweeper both reconcile through it.
+5. **Survey persistence** — post the in-app survey answers to
+   `landing_survey_responses`. The payload already matches the endpoint
+   body, so this is the `submitSurvey()` call plus the name/apellido
+   decision (the account may not carry a last name, and the column is
+   `NOT NULL` today).
 
 ## License
 
