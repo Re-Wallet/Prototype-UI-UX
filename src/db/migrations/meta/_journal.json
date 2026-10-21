@@ -15,6 +15,13 @@
       "when": 1792527132075,
       "tag": "0001_blue_enchantress",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792548934378,
+      "tag": "0002_petite_jazinda",
+      "breakpoints": true
     }
   ]
 }

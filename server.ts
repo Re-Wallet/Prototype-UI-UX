@@ -48,6 +48,7 @@ import { dbQueryCounter } from './src/services/dbMetrics';
 import { getSignatureFeePayer, verifySignatureOwnership } from './src/services/signatureOwnership';
 import { pacedRpc } from './src/services/rpcThrottle';
 import { getLandingMetrics } from './src/services/dynamicMetrics';
+import { buildLandingMetricsResponse, getLedgerMetrics } from './src/services/ledgerMetrics';
 import { syncAllWallets } from './src/services/historySync';
 import { noteCleanSweep, noteRateLimit } from './src/services/rpcThrottle';
 import { sealLiveTransactions, sealLivePaymentLinks } from './src/services/realtimeServer';
@@ -797,12 +798,37 @@ app.get('/api/tunnel', async (_req, res) => {
   }
 });
 
+/**
+ * The landing's metric strip.
+ *
+ * Two sources, one payload: Dynamic's topline (adoption: users, wallets,
+ * sessions) and our own ledger (payments: transactions, volume, success rate,
+ * settlement time). The Dynamic fields are served exactly as before, so any
+ * consumer of the current shape keeps working; the ledger fields are added
+ * on top.
+ *
+ * Both sources fail soft on their own, and so does this endpoint: a public
+ * page gets numbers, never an error.
+ */
 app.get('/api/landing/metrics', async (_req, res) => {
   try {
-    res.json(await getLandingMetrics());
+    const [dynamic, ledger] = await Promise.all([
+      getLandingMetrics(),
+      getLedgerMetrics(),
+    ]);
+    res.json(buildLandingMetricsResponse(dynamic, ledger));
   } catch (error) {
     console.error('⚠️  /api/landing/metrics:', error);
-    res.json({ users: 0, wallets: 0, sessions: 0, fetchedAt: null });
+    res.json({
+      users: 0,
+      wallets: 0,
+      sessions: 0,
+      transactions: 0,
+      volumeUsdc: 0,
+      successRate: 0,
+      avgProcessingMs: 0,
+      fetchedAt: null,
+    });
   }
 });
 

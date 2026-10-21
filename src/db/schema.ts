@@ -449,6 +449,42 @@ export const auditLog = pgTable(
  * the snapshot here, and serves it until the cache TTL expires — the landing
  * then animates the real numbers instead of placeholders.
  */
+/**
+ * Single-row snapshot of the ledger metrics served to the landing page.
+ *
+ * Same pattern as `dynamic_metrics`, but for the numbers that only exist in
+ * our own ledger: Dynamic's analytics describe adoption (users, sessions,
+ * retention) and say nothing about transactions, volume, success rate or
+ * settlement time. Those come from the projection of Solana that this
+ * database holds.
+ *
+ * The snapshot exists so a database hiccup never puts zeros on a public
+ * page: the last known numbers are served until the next successful pull.
+ */
+export const ledgerMetrics = pgTable('ledger_metrics', {
+  /** Pinned single row (always 1): one ledger, one shared snapshot. */
+  id: integer('id').primaryKey(),
+
+  /** Distinct on-chain movements projected into the ledger. */
+  transactions: integer('transactions').default(0).notNull(),
+  /** USDC moved, counted once per on-chain movement. */
+  volumeUsdc: doublePrecision('volume_usdc').default(0).notNull(),
+  /** Share of settled movements that completed, in percent (0-100). */
+  successRate: doublePrecision('success_rate').default(0).notNull(),
+  /** Average time from the webhook landing to the movement being projected. */
+  avgProcessingMs: integer('avg_processing_ms').default(0).notNull(),
+
+  /** Last successful computation; null until the first one. */
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }),
+
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .default(sql`now()`)
+    .notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .default(sql`now()`)
+    .notNull(),
+});
+
 export const dynamicMetrics = pgTable('dynamic_metrics', {
   /** Pinned single row (always 1): one environment, one shared snapshot. */
   id: integer('id').primaryKey(),
@@ -604,3 +640,6 @@ export type NewAuditLogEntry = typeof auditLog.$inferInsert;
 
 export type DynamicMetrics = typeof dynamicMetrics.$inferSelect;
 export type NewDynamicMetrics = typeof dynamicMetrics.$inferInsert;
+
+export type LedgerMetrics = typeof ledgerMetrics.$inferSelect;
+export type NewLedgerMetrics = typeof ledgerMetrics.$inferInsert;
