@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
 import { db, pool } from '../db';
 import { paymentLinks, users } from '../db/schema';
 import { generateReference } from '../adapters/solana-pay';
+import { cacheKey, invalidate, invalidatePrefix } from './readCache';
 
 export type PaymentLinkStatus = 'active' | 'paid' | 'partial' | 'expired' | 'cancelled';
 
@@ -19,6 +20,8 @@ export interface PaymentLink {
   paidAt: Date | null;
   paidByPubkey: string | null;
   paidTxId: number | null;
+  /** Signature of the transaction that settled this link. */
+  paidTxSignature: string | null;
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -40,6 +43,7 @@ interface PaymentLinkRow {
   paidAt: Date | null;
   paidByPubkey: string | null;
   paidTxId: number | null;
+  paidTxSignature: string | null;
   expiresAt: Date | null;
   metadataJson: unknown;
   createdAt: Date;
@@ -60,6 +64,7 @@ function toPaymentLink(row: PaymentLinkRow): PaymentLink {
     paidAt: row.paidAt,
     paidByPubkey: row.paidByPubkey,
     paidTxId: row.paidTxId,
+    paidTxSignature: row.paidTxSignature,
     expiresAt: row.expiresAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -125,6 +130,9 @@ export async function createPaymentLink(
     })
     .returning();
 
+  // The cached link list no longer matches the table.
+  invalidate(cacheKey.paymentLinks(userId));
+
   return toPaymentLink(row);
 }
 
@@ -156,16 +164,21 @@ export async function getPaymentLinkBySlug(slug: string): Promise<PaymentLink | 
 }
 
 /**
- * Mark a payment link as paid. Idempotent: only transitions from `active`
- * or `partial` to `paid`; a link already `paid` is returned unchanged.
+ * Atomically settle a payment link.
  *
- * Called by the settle endpoint after on-chain verification confirms the
- * payment, and by the sweeper as a backstop when it observes the
- * reference in a transaction's account keys.
+ * The `status IN ('active','partial')` predicate lives inside the UPDATE, so
+ * two concurrent settles cannot both win: the loser's UPDATE matches zero
+ * rows and this returns null. Returns the freshly-settled row, or null when
+ * the link was already settled or does not exist.
  */
-export async function markPaymentLinkPaid(
+export async function trySettlePaymentLink(
   reference: string,
-  settlement: { paidAmountUsdc: number; paidByPubkey: string; paidTxId: number | null }
+  settlement: {
+    paidAmountUsdc: number;
+    paidByPubkey: string;
+    paidTxId: number | null;
+    paidTxSignature?: string | null;
+  }
 ): Promise<PaymentLink | null> {
   const now = new Date();
   const [row] = await db
@@ -176,22 +189,61 @@ export async function markPaymentLinkPaid(
       paidAt: now,
       paidByPubkey: settlement.paidByPubkey,
       paidTxId: settlement.paidTxId,
+      paidTxSignature: settlement.paidTxSignature ?? null,
       updatedAt: now,
     })
     .where(
       and(
         eq(paymentLinks.referencePubkey, reference),
-        sql`${paymentLinks.status} IN ('active', 'partial')`
+        sql`${paymentLinks.status} IN ('active', 'partial')`,
+        // One signature settles exactly one link.
+        //
+        // The claim path and the webhook path both write the signature, so
+        // without this a single transfer could credit two links: the payer
+        // opens two payment pages, signs once, and claims both.
+        // The table name is a static identifier, so it is safe to inline;
+        // Drizzle's `alias()` renders only the alias in a raw template, which
+        // would produce `FROM "other"` with no table behind it.
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${sql.raw('payment_links AS other')}
+          WHERE other.paid_tx_signature = ${settlement.paidTxSignature ?? null}
+            AND other.reference_pubkey <> ${reference}
+        )`
       )
     )
     .returning();
 
-  if (!row) {
-    // Already paid or not found — return current state.
-    const existing = await getPaymentLinkByReference(reference);
-    return existing;
+  if (!row) return null;
+
+  const settled = toPaymentLink(row);
+  // The cached link list still shows this link as active. Invalidating here
+  // covers every path that settles a link (the webhook ingestor included).
+  invalidate(cacheKey.paymentLinks(settled.userId));
+  return settled;
+}
+
+/**
+ * Mark a payment link as paid. Idempotent: only transitions from `active`
+ * or `partial` to `paid`; a link already `paid` is returned unchanged.
+ *
+ * Called by the settle endpoint after on-chain verification confirms the
+ * payment, and by the sweeper as a backstop when it observes the
+ * reference in a transaction's account keys.
+ */
+export async function markPaymentLinkPaid(
+  reference: string,
+  settlement: {
+    paidAmountUsdc: number;
+    paidByPubkey: string;
+    paidTxId: number | null;
+    paidTxSignature?: string | null;
   }
-  return toPaymentLink(row);
+): Promise<PaymentLink | null> {
+  const settled = await trySettlePaymentLink(reference, settlement);
+  if (settled) return settled;
+
+  // Already paid or not found — return current state.
+  return getPaymentLinkByReference(reference);
 }
 
 /**
@@ -208,6 +260,39 @@ export async function listPaymentLinks(userId: number, limit = 20): Promise<Paym
 }
 
 /**
+ * Drizzle selection for Neon Realtime: every `payment_links` column aliased
+ * under its Drizzle JS key. Mirrors `aliasAllTransactions` — the Realtime
+ * client parses `timestamptz` and `jsonb` with the default parsers, so the
+ * aliased row shape matches `PaymentLink` exactly.
+ *
+ * The concrete key set is load-bearing: a bare index signature would erase
+ * the row shape, and the sealed capability could no longer be cast to
+ * `PaymentLink`.
+ */
+function aliasAllPaymentLinks() {
+  return Object.fromEntries(
+    Object.entries(getTableColumns(paymentLinks)).map(([key, column]) => [
+      key,
+      sql`${column}`.as(key),
+    ])
+  ) as unknown as Record<keyof PaymentLinkRow, SQL>;
+}
+
+/**
+ * Live-query twin of {@link listPaymentLinks}: same filter, order and limit,
+ * expressed as a Neon Realtime query. This is what lets the collector's
+ * screen learn that a link was paid without polling or refetching.
+ */
+export function livePaymentLinksQuery(userId: number, limit = 20) {
+  return db
+    .select(aliasAllPaymentLinks())
+    .from(paymentLinks)
+    .where(eq(paymentLinks.userId, userId))
+    .orderBy(desc(paymentLinks.createdAt))
+    .limit(limit);
+}
+
+/**
  * Expire links whose `expiresAt` has passed. Called by the sweeper.
  */
 export async function expireStalePaymentLinks(): Promise<number> {
@@ -216,15 +301,24 @@ export async function expireStalePaymentLinks(): Promise<number> {
      WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < now()
      RETURNING id`
   );
+  // The sweep spans every user, so the whole family of link lists is stale.
+  if (rows.length > 0) invalidatePrefix('payment-links:');
   return rows.length;
 }
 
 /**
  * Try to settle a payment link after an observed on-chain transfer.
  *
- * Matches active links for `recipient` whose fixed amount equals the
+ * Matches active links owned by `recipient` whose fixed amount equals the
  * transferred USDC amount (open-amount links match any amount). Marks the
  * first match as paid and returns it.
+ *
+ * Candidate selection is scoped to the recipient IN SQL. Filtering by owner
+ * after the fact is not equivalent: a global scan for "the oldest active link
+ * with this amount" can land on another user's link, and the owner check then
+ * abandons the real one — leaving it `active` and therefore payable a second
+ * time. Fixed-amount links are preferred over open-amount ones, and among
+ * equals the oldest wins.
  *
  * Called by the webhook ingestor after projecting a successful incoming
  * USDC transfer, so the merchant's charge settles the moment the webhook
@@ -237,37 +331,92 @@ export async function settlePaymentLinkForTransfer(params: {
   payerPubkey: string;
   slot: number | null;
 }): Promise<PaymentLink | null> {
-  const links = await db
+  // Idempotency: this transfer may already have settled a link, claimed by
+  // the payer. One signature settles exactly one link — without this check
+  // the webhook would look for "some active link of this amount" and could
+  // settle a DIFFERENT one, crediting a second, wrong link.
+  const [claimed] = await db
     .select()
     .from(paymentLinks)
+    .where(eq(paymentLinks.paidTxSignature, params.transactionHash))
+    .limit(1);
+  if (claimed) return toPaymentLink(claimed);
+
+  const candidates = await db
+    .select({ referencePubkey: paymentLinks.referencePubkey })
+    .from(paymentLinks)
+    .innerJoin(users, eq(users.id, paymentLinks.userId))
     .where(
       and(
         eq(paymentLinks.status, 'active'),
+        eq(users.publicKey, params.recipient),
         // Match fixed-amount links exactly, open-amount links always.
         sql`(${paymentLinks.amountUsdc} = ${params.amountUsdc} OR ${paymentLinks.amountUsdc} IS NULL)`
       )
     )
-    .orderBy(paymentLinks.createdAt)
-    .limit(1);
+    // Exact-amount links first (amount_usdc IS NULL sorts last), then NEWEST.
+    //
+    // Newest first, not oldest: a payment corresponds to the charge that was
+    // shared most recently. Picking the oldest would settle a stale request
+    // and leave the one actually shared still payable.
+    .orderBy(sql`${paymentLinks.amountUsdc} IS NULL`, desc(paymentLinks.createdAt));
 
-  // The link's owner is the recipient — resolve to find their userId.
-  if (links.length === 0) return null;
+  // Settle the first matching link. The UPDATE is atomic, so when two
+  // payments for the same amount land at once the loser moves on to the next
+  // candidate instead of double-crediting the first one.
+  for (const candidate of candidates) {
+    const settled = await trySettlePaymentLink(candidate.referencePubkey, {
+      paidAmountUsdc: params.amountUsdc,
+      paidByPubkey: params.payerPubkey,
+      paidTxId: null, // Will be linked via transaction upsert
+      paidTxSignature: params.transactionHash,
+    });
+    if (settled) return settled;
+  }
 
-  const link = links[0];
-  // Confirm the recipient owns this link.
-  const [owner] = await db
+  return null;
+}
+
+/**
+ * Settle a link the payer declared by reference.
+ *
+ * The reference does not travel on-chain, so the webhook can only guess
+ * which link a transfer pays (by recipient and amount) — and it guesses
+ * wrong whenever the same recipient has two active links of the same amount.
+ * The payer, on the other hand, knows exactly which link it opened: it is
+ * the reference in the URL.
+ *
+ * The caller MUST have verified on-chain that the transaction moved the
+ * link's amount to its recipient before calling this. The settlement itself
+ * is the same atomic UPDATE the webhook path uses, so a link can only be
+ * settled once.
+ */
+export async function claimPaymentLinkByReference(
+  reference: string,
+  settlement: {
+    paidAmountUsdc: number;
+    paidByPubkey: string;
+    paidTxId: number | null;
+    paidTxSignature: string;
+  }
+): Promise<PaymentLink | null> {
+  const settled = await trySettlePaymentLink(reference, settlement);
+  if (!settled) return null;
+  return settled;
+}
+
+/**
+ * The wallet that receives a link's payments: the link's owner.
+ *
+ * A payment link is always created for the wallet of its owner, so the
+ * owner's public key IS the link's recipient.
+ */
+export async function getPaymentLinkRecipient(reference: string): Promise<string | null> {
+  const [row] = await db
     .select({ publicKey: users.publicKey })
-    .from(users)
-    .where(eq(users.id, link.userId))
+    .from(paymentLinks)
+    .innerJoin(users, eq(users.id, paymentLinks.userId))
+    .where(eq(paymentLinks.referencePubkey, reference))
     .limit(1);
-
-  if (!owner || owner.publicKey !== params.recipient) return null;
-
-  const paid = await markPaymentLinkPaid(link.referencePubkey, {
-    paidAmountUsdc: params.amountUsdc,
-    paidByPubkey: params.payerPubkey,
-    paidTxId: null, // Will be linked via transaction upsert
-  });
-
-  return paid;
+  return row?.publicKey ?? null;
 }

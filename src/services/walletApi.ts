@@ -9,8 +9,18 @@ import type { Transaction } from '../types/wallet';
 import type { SealedLiveQuery } from '@neon/realtime/client';
 import type { LiveTransactionRow } from './transactionMapper';
 
-const API_BASE =
-  import.meta.env.VITE_API_URL?.trim() || 'http://127.0.0.1:3001';
+/**
+ * Base URL for API calls.
+ *
+ * Empty by default, which makes every call same-origin and relative. The
+ * Vite dev server proxies `/api` to the API process, so the app works the
+ * same whether it is opened on localhost or through a tunnel — and a payer
+ * opening `/pay` from another device can reach the API instead of trying
+ * `127.0.0.1`, which would point at their own machine.
+ *
+ * `VITE_API_URL` still overrides it for a split deployment.
+ */
+const API_BASE = import.meta.env.VITE_API_URL?.trim() ?? '';
 
 const REQUEST_TIMEOUT_MS = 4000;
 
@@ -36,9 +46,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /**
+ * Browser-side mirror of the server cache: the last known address book per
+ * wallet.
+ *
+ * The Transfer and Withdraw screens remount every time the user switches tab.
+ * Painting this synchronously keeps the contacts from flashing empty while
+ * the refresh lands. It is a pure latency buffer — the server still owns the
+ * truth, and the refresh below replaces it.
+ */
+const recipientsCache = new Map<string, RecentRecipient[]>();
+
+/** The last known address book for `walletAddress`, or null if never loaded. */
+export function peekRecentRecipients(walletAddress: string): RecentRecipient[] | null {
+  return recipientsCache.get(walletAddress) ?? null;
+}
+
+/**
  * Recent recipients for the Transfer screen; [] when the API is offline or
  * the wallet is not registered. Scoped by the authenticated wallet address so
  * each user only sees recipients THEY sent to.
+ *
+ * Offline, the last known list is served rather than an empty one.
  */
 export async function fetchRecentRecipients(
   walletAddress: string
@@ -47,9 +75,11 @@ export async function fetchRecentRecipients(
     const data = await request<RecentRecipient[]>(
       `/api/wallet/contacts?wallet=${encodeURIComponent(walletAddress)}`
     );
-    return Array.isArray(data) ? data : [];
+    const list = Array.isArray(data) ? data : [];
+    recipientsCache.set(walletAddress, list);
+    return list;
   } catch {
-    return [];
+    return recipientsCache.get(walletAddress) ?? [];
   }
 }
 
@@ -312,8 +342,127 @@ export interface PaymentLinkDto {
   paidAt: string | null;
   paidByPubkey: string | null;
   paidTxId: number | null;
+  /** Signature of the transaction that settled this link. */
+  paidTxSignature: string | null;
   expiresAt: string | null;
   createdAt: string;
+}
+
+/**
+ * Row shape produced by `livePaymentLinksQuery`: every `payment_links`
+ * column under its Drizzle JS key. The Realtime client revives `timestamptz`
+ * with its default parser, so dates arrive as `Date` — unlike the REST path,
+ * where JSON serialization turns them into ISO strings.
+ */
+export interface LivePaymentLinkRow {
+  id: number;
+  userId: number;
+  slug: string;
+  referencePubkey: string;
+  amountUsdc: number | null;
+  currency: string;
+  concept: string;
+  status: PaymentLinkDto['status'];
+  paidAmountUsdc: number;
+  paidAt: Date | null;
+  paidByPubkey: string | null;
+  paidTxId: number | null;
+  paidTxSignature: string | null;
+  expiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Serialize a live row's timestamp, tolerating an absent or invalid date. */
+function toIsoString(value: Date | null | undefined): string | null {
+  if (!value) return null;
+  const time = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return Number.isNaN(time) ? null : new Date(time).toISOString();
+}
+
+/**
+ * Map a live Realtime payment-link row to the same DTO the REST path
+ * returns, so both sources feed the UI identically.
+ */
+export function mapLivePaymentLink(row: LivePaymentLinkRow): PaymentLinkDto {
+  return {
+    id: row.id,
+    slug: row.slug,
+    referencePubkey: row.referencePubkey,
+    amountUsdc: row.amountUsdc,
+    currency: row.currency,
+    concept: row.concept,
+    status: row.status,
+    paidAmountUsdc: row.paidAmountUsdc,
+    paidAt: toIsoString(row.paidAt),
+    paidByPubkey: row.paidByPubkey,
+    paidTxId: row.paidTxId,
+    paidTxSignature: row.paidTxSignature ?? null,
+    expiresAt: toIsoString(row.expiresAt),
+    createdAt: toIsoString(row.createdAt) ?? new Date(0).toISOString(),
+  };
+}
+
+/**
+ * Where the "Inicio" button on the payment page should take the user.
+ *
+ * The payment link and the app home are not always the same place during
+ * development: the link has to be reachable from another device (so it
+ * points at the tunnel), while the app home is where the user's session
+ * already exists. A tunnel and `127.0.0.1` are DIFFERENT origins, so the
+ * Dynamic session — which lives in localStorage — does not carry over, and
+ * landing on the tunnel origin asks the user to log in again.
+ *
+ * `VITE_PUBLIC_APP_URL` names the app's home. Without it, the current
+ * origin is used, which is correct in production where there is only one.
+ */
+export function resolveAppHomeUrl(): string {
+  const configured = import.meta.env.VITE_PUBLIC_APP_URL?.trim();
+  return configured ? configured.replace(/\/$/, '') : window.location.origin;
+}
+
+/**
+ * The public origin the app is reachable at.
+ *
+ * When the app runs on localhost the payment link must still point at the
+ * public tunnel, or the payer (on another device) cannot open it. The API
+ * publishes the tunnel's current hostname, so a tunnel restart never needs a
+ * frontend rebuild.
+ *
+ * Returns null when the app is already on a public origin or the tunnel is
+ * unknown; the caller then keeps the browser's own origin.
+ */
+export async function fetchPublicAppUrl(): Promise<string | null> {
+  const host = window.location.hostname;
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+  if (!isLocal) return window.location.origin;
+  try {
+    const data = await request<{ url: string | null }>('/api/tunnel');
+    return data.url ? data.url.replace(/\/$/, '') : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Mint a sealed Neon Realtime capability for the user's payment links.
+ * Fail-soft (null): without a capability the UI keeps the REST path, exactly
+ * like `fetchSealedTransactions`.
+ */
+export async function fetchSealedPaymentLinks(
+  walletAddress: string
+): Promise<SealedLiveQuery<LivePaymentLinkRow> | null> {
+  try {
+    return await request<SealedLiveQuery<LivePaymentLinkRow>>(
+      '/api/payment-links/live',
+      {
+        method: 'POST',
+        body: JSON.stringify({ wallet: walletAddress }),
+      }
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -333,6 +482,38 @@ export async function createPaymentLink(
   } catch {
     return null;
   }
+}
+
+/**
+ * Declare which payment link this transaction settles.
+ *
+ * The reference does not travel on-chain, so without this the server has to
+ * guess the link from the recipient and the amount — and it guesses wrong
+ * when the same recipient has two open charges of the same amount. The payer
+ * knows exactly which link it opened, so it says so.
+ *
+ * Fail-soft: the webhook still settles the link if this call does not reach
+ * the server, and the server verifies the transfer on-chain before settling.
+ */
+export async function claimPaymentLink(reference: string, signature: string): Promise<boolean> {
+  // The server verifies the transfer on-chain and the public RPC can be
+  // rate-limited, so a transient failure gets a couple of retries. The
+  // webhook remains the fallback.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const data = await request<{ ok: boolean }>('/api/payment-links/claim', {
+        method: 'POST',
+        body: JSON.stringify({ reference, signature }),
+      });
+      if (data?.ok === true) return true;
+      // A definitive rejection (the link is settled, the amount does not
+      // match) will not improve with another attempt.
+      return false;
+    } catch {
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  }
+  return false;
 }
 
 /**
