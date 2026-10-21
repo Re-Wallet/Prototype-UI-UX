@@ -22,7 +22,7 @@
       Si queda vacío, el botón de demo se deshabilita en vez de llevar
       a un placeholder roto.
     -->
-    <meta name="re-wallet-app-url" content="https://TU-APP-URL">
+    <meta name="re-wallet-app-url" content="" />
     <meta property="og:type" content="website">
     <meta name="twitter:card" content="summary_large_image">
   </head>
@@ -86,17 +86,52 @@
     <!-- MÉTRICAS -->
     <section class="metrics-strip" data-label="MÉTRICAS" aria-label="Métricas de Re Wallet">
       <div class="metric">
-        <span class="metric-value" data-metric="users">0</span>
+        <span class="metric-figure">
+          <span class="metric-value" data-metric="transactions" data-format="int">0</span>
+        </span>
+        <span class="metric-label">TRANSACCIONES</span>
+      </div>
+
+      <div class="metric">
+        <span class="metric-figure">
+          <span class="metric-value" data-metric="volumeUsdc" data-format="decimal">0</span>
+          <span class="metric-unit">USDC</span>
+        </span>
+        <span class="metric-label">VOLUMEN</span>
+      </div>
+
+      <div class="metric">
+        <span class="metric-figure">
+          <span class="metric-value" data-metric="wallets" data-format="int">0</span>
+        </span>
+        <span class="metric-label">BILLETERAS CREADAS</span>
+      </div>
+
+      <div class="metric">
+        <span class="metric-figure">
+          <span class="metric-value" data-metric="users" data-format="int">0</span>
+        </span>
         <span class="metric-label">USUARIOS</span>
       </div>
 
       <div class="metric">
-        <span class="metric-value" data-metric="wallets">0</span>
-        <span class="metric-label">BILLETAS CONECTADAS</span>
+        <span class="metric-figure">
+          <span class="metric-value" data-metric="successRate" data-format="percent">0</span>
+        </span>
+        <span class="metric-label">TASA DE ÉXITO</span>
       </div>
 
       <div class="metric">
-        <span class="metric-value" data-metric="sessions">0</span>
+        <span class="metric-figure">
+          <span class="metric-value" data-metric="avgProcessingMs" data-format="seconds">0</span>
+        </span>
+        <span class="metric-label">TIEMPO DE OPERACIÓN</span>
+      </div>
+
+      <div class="metric">
+        <span class="metric-figure">
+          <span class="metric-value" data-metric="sessions" data-format="int">0</span>
+        </span>
         <span class="metric-label">SESIONES</span>
       </div>
     </section>

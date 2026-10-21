@@ -1256,9 +1256,15 @@ main {
 
 /* MÉTRICAS */
 
+/* La franja de métricas.
+
+   Siete números: cuatro arriba y tres abajo. La última métrica toma las dos
+   columnas que sobran para que la segunda fila cierre completa en vez de
+   dejar un hueco. Los separadores se dibujan con bordes, así que una
+   columna vacía se vería como un corte raro: mejor que el grid esté lleno. */
 .metrics-strip {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   margin: 0 35px;
 
   border: 3px solid var(--ink);
@@ -1273,14 +1279,47 @@ main {
   border-right: 2px solid rgba(250, 247, 237, 0.22);
 }
 
+/* La 4ª y la 7ª terminan una fila: no llevan separador a la derecha. */
+.metric:nth-child(4),
+.metric:nth-child(7) {
+  border-right: 0;
+}
+
+/* La primera fila se separa de la segunda. */
+.metric:nth-child(-n + 4) {
+  border-bottom: 2px solid rgba(250, 247, 237, 0.22);
+}
+
+/* La última métrica ocupa las dos columnas restantes. */
+.metric:nth-child(7) {
+  grid-column: span 2;
+}
+
 .metric:last-child {
   border-right: 0;
+}
+
+/* El número y su unidad viajan juntos: la unidad es texto fijo y el número
+   se anima, así que no pueden vivir en el mismo nodo. */
+.metric-figure {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+}
+
+.metric-unit {
+  font-family: "DM Mono", monospace;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: var(--paper);
+  opacity: 0.7;
 }
 
 .metric-value {
   display: block;
   font-family: "DM Mono", monospace;
-  font-size: clamp(2.4rem, 6vw, 3.8rem);
+  font-size: clamp(2.2rem, 5vw, 3.4rem);
   font-weight: 500;
   letter-spacing: -0.05em;
   color: var(--orange);
@@ -1564,13 +1603,22 @@ main {
 
   .metrics-strip {
     margin: 0 20px;
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .metric {
     padding: 28px 20px;
     border-right: 0;
     border-bottom: 2px solid rgba(250, 247, 237, 0.22);
+  }
+
+  /* En dos columnas, la de la izquierda es la que lleva el separador. */
+  .metric:nth-child(odd):not(:nth-child(7)) {
+    border-right: 2px solid rgba(250, 247, 237, 0.22);
+  }
+
+  .metric:nth-child(7) {
+    border-right: 0;
   }
 
   .metric:last-child {

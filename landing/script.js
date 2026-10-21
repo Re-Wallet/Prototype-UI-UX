@@ -18,9 +18,14 @@ const IS_LOCAL =
 const CONFIGURED_APP_URL = (
   document.querySelector('meta[name="re-wallet-app-url"]')?.content ?? ""
 ).trim();
+// Vacío o placeholder = la landing y la app se sirven juntas, así que el
+// origen actual ES la app. Un placeholder sin detectar haría que el botón
+// de demo apuntara a un host que no existe.
+const HAS_APP_URL =
+  CONFIGURED_APP_URL !== "" && !CONFIGURED_APP_URL.includes("TU-APP-URL");
 const APP_URL = IS_LOCAL
   ? "http://127.0.0.1:3000"
-  : CONFIGURED_APP_URL && !CONFIGURED_APP_URL.startsWith("TU-")
+  : HAS_APP_URL
     ? CONFIGURED_APP_URL
     : window.location.origin;
 /* API — en dev es el server Express (:3001); en prod, el mismo worker. */
@@ -36,18 +41,26 @@ const API_URL = IS_LOCAL ? "http://127.0.0.1:3001" : APP_URL || window.location.
    franja se anima con ceros (fail-soft).
 --------------------------------------------------------------------------- */
 const METRICS = {
+  // De Dynamic (adopción).
   users: 0,
   wallets: 0,
   sessions: 0,
+  // Del ledger (economía de pagos).
+  transactions: 0,
+  volumeUsdc: 0,
+  successRate: 0,
+  avgProcessingMs: 0,
 };
 
 const metricsReady = fetch(`${API_URL}/api/landing/metrics`)
   .then((res) => (res.ok ? res.json() : null))
   .then((data) => {
     if (!data) return;
-    METRICS.users = Number(data.users) || 0;
-    METRICS.wallets = Number(data.wallets) || 0;
-    METRICS.sessions = Number(data.sessions) || 0;
+    // Cada contador se toma por separado: un campo ausente deja su métrica
+    // en cero en vez de romper la franja entera.
+    for (const key of Object.keys(METRICS)) {
+      METRICS[key] = Number(data[key]) || 0;
+    }
   })
   .catch(() => {
     /* offline o API caída: se animan ceros */
@@ -81,14 +94,35 @@ if (headlineRotate && !prefersReducedMotion) {
   }, 2800);
 }
 
-/* MÉTRICAS — cuenta animada al entrar en viewport */
+/* MÉTRICAS — cuenta animada al entrar en viewport.
+
+   Cada métrica tiene su formato: los conteos son enteros, el volumen lleva
+   dos decimales, la tasa un porcentaje y el tiempo se muestra en segundos
+   (el API lo entrega en milisegundos). */
+const METRIC_FORMATS = {
+  int: (value) => Math.round(value).toLocaleString("es"),
+  decimal: (value) =>
+    value.toLocaleString("es", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }),
+  percent: (value) =>
+    `${value.toLocaleString("es", { maximumFractionDigits: 1 })}%`,
+  seconds: (value) =>
+    `${(value / 1000).toLocaleString("es", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}s`,
+};
+
 function animateCount(el, target, duration = 1400) {
   const start = performance.now();
+  const format = METRIC_FORMATS[el.dataset.format] || METRIC_FORMATS.int;
 
   const frame = (now) => {
     const progress = Math.min((now - start) / duration, 1);
     const eased = 1 - Math.pow(1 - progress, 3);
-    el.textContent = Math.round(target * eased).toLocaleString("es");
+    el.textContent = format(target * eased);
 
     if (progress < 1) {
       requestAnimationFrame(frame);
