@@ -406,17 +406,24 @@ export function mapLivePaymentLink(row: LivePaymentLinkRow): PaymentLinkDto {
 /**
  * Where the "Inicio" button on the payment page should take the user.
  *
- * The payment link and the app home are not always the same place during
- * development: the link has to be reachable from another device (so it
- * points at the tunnel), while the app home is where the user's session
- * already exists. A tunnel and `127.0.0.1` are DIFFERENT origins, so the
- * Dynamic session — which lives in localStorage — does not carry over, and
- * landing on the tunnel origin asks the user to log in again.
+ * The Dynamic session lives in the localStorage of the origin it was
+ * created on, and a tunnel and `127.0.0.1` are DIFFERENT origins: the
+ * session does not travel between them, and landing on the other one asks
+ * the user to log in again.
  *
- * `VITE_PUBLIC_APP_URL` names the app's home. Without it, the current
- * origin is used, which is correct in production where there is only one.
+ * So the rule is "stay where you are" whenever the app is already being
+ * served from a public origin: that origin IS the app, and the session
+ * that is active there is the one the user has. The configured origin only
+ * matters in local development, where the app runs on `127.0.0.1` and the
+ * payment link is served from the tunnel — there, the configured value
+ * brings the user back to the dev app that holds their session.
  */
 export function resolveAppHomeUrl(): string {
+  const host = window.location.hostname;
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+
+  if (!isLocal) return window.location.origin;
+
   const configured = import.meta.env.VITE_PUBLIC_APP_URL?.trim();
   return configured ? configured.replace(/\/$/, '') : window.location.origin;
 }
