@@ -1,0 +1,127 @@
+---
+title: "Dynamic Disambiguation"
+description: "Multidisciplinary analysis of the term 'Dynamic'."
+author: "Ollama Swarm + Laya"
+date: "2026-10-20"
+lang: en
+categories: [Disambiguation, Swarm]
+format: html
+toc: true
+math: false
+bibliography: ReferencesBib
+csl: IeeeCsl
+cite-method: citeproc
+generator-script: "generate-note-swarm-v16.sh"
+---
+
+## Sense 1: Linguistic Sense
+
+### Def
+"Dynamic" in linguistics refers to language that is constantly evolving, changing, and adapting over time.
+
+### CTP
+Core principles include:
+
+- **Change:** Language is not static; it undergoes continuous shifts in pronunciation, grammar, and vocabulary.
+- **Interaction:** Language change is driven by social interaction, contact between languages, and technological advancements.
+- **Variation:** Different speakers and communities may use language in diverse ways, leading to regional and social dialects.
+
+### Ex
+The evolution of English from Old English to Modern English demonstrates its dynamic nature. Words have changed meaning, grammatical structures have shifted, and new words have been introduced to reflect societal changes. 
+
+## Sense 2: Logical Sense
+
+### Def
+In the context of "Dynamic", "Dynamic" can be understood as a term that expresses a state or property of being in motion, changing, or capable of change. It implies a process or system that is not static but rather evolving or transforming over time or through some other variable. This sense of "Dynamic" captures the essence of things that are in a state of flux, where change is a fundamental characteristic.
+
+### CTP
+#### Core Principles:
+1. **Invariance and Variability**: A dynamic system is characterized by its ability to change over time or in response to external factors. This variability is a key principle of dynamics.
+2. **State Transitions**: Dynamics involve transitions from one state to another. These transitions can be continuous or discrete, depending on the nature of the system.
+3. **Feedback Loops**: Dynamic systems often include feedback loops, where the output of the system influences its input, creating a self-regulating mechanism.
+4. **Necessity of Change**: The necessity condition for a system to be dynamic is that it must be capable of change. This means that there must be a variable or state that can take on different values or positions over time.
+5. **Sufficiency of Change**: While the necessity of change is a fundamental aspect, the sufficiency of change (i.e., the actual occurrence of change) is also crucial. This means that the system must actually undergo the changes it is capable of.
+
+#### Terminology:
+- **State Space**: The set of all possible states of a dynamic system.
+- **Phase Space**: A representation of the state space with axes representing the variables of the system.
+- **Dynamics**: The study of how systems change over time.
+- **Equations of Motion**: Mathematical descriptions that capture the dynamics of a system.
+- **Attractors**: Long-term behavior of dynamic systems towards certain states or sets of states.
+
+#### Technical Concepts:
+- **Nonlinearity**: Many dynamic systems exhibit nonlinear behavior, where the output is not proportional to the input. This nonlinearity can lead to complex behaviors such as chaos.
+- **Stability**: The property of a dynamic system to return to a certain state or equilibrium after a disturbance.
+- ** instabilities**: Conversely, the property of a dynamic system to move away from a certain state or equilibrium under certain conditions.
+- **Bifurcations**: Points at which a small change in a system parameter causes a sudden change in the system's behavior.
+- **Sensitivity to Initial Conditions**: A hallmark of chaotic systems, where small changes in initial conditions can lead to vastly different outcomes.
+
+### Ex
+#### Example:
+Consider a simple pendulum, which is a classic example of a dynamic system. The position of the pendulum bob (the weight at the end of the pendulum) changes over time as it swings back and forth. The dynamics of the pendulum can be described by a differential equation that takes into account the force of gravity, the length of the pendulum, and the initial conditions such as the angle of displacement and the initial velocity.
+
+The equation of motion for a simple pendulum, assuming small angular displacements, is given by:
+ {d^2}{dt^2} + {g}{l}() = 0 
+where:
+- is the angular displacement from the vertical.
+- t is time.
+- g is the acceleration due to gravity.
+- l is the length of the pendulum.
+
+This equation describes how the angular acceleration of the pendulum is influenced by the gravitational force and the length of the pendulum. The solution to this equation shows the dynamic behavior of the pendulum over time, demonstrating the periodic motion characteristic of dynamic systems.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define variables
+A = sp.symbols('A')  # State of the system
+B = sp.symbols('B')  # Change in the system
+
+# Logical implication: A only if B
+implication = sp.Implies(A, B)
+
+# Example: A dynamic system can only be in motion if there is a change in its state.
+# This can be formalized as: If the system is dynamic (A), then there is a change in its state (B).
+# This implies that the presence of change (B) is necessary for the system to be dynamic (A).
+example = sp.simplify(implication)
+
+example
+```
+
+## Sense 3: General Sense
+
+### Def
+Dynamic, in a general sense, refers to something that is characterized by change, adaptability, or responsiveness to conditions.
+
+### CTP
+The term "dynamic" often implies a system or process that can adjust or evolve over time, in contrast to static or fixed entities. It can be used in various contexts such as business, technology, and science to describe systems that are flexible and responsive.
+
+### Ex
+- **Business Context**: A dynamic business environment is one where the market conditions, customer preferences, and technological advancements are constantly changing, requiring the business to adapt its strategies and operations.
+- **Technology Context**: A dynamic programming language, such as Python, allows for runtime modifications and flexibility in code execution, which is not possible in static languages like C++.
+- **Science Context**: In physics, a dynamic system is one that changes over time, such as a system of moving particles, as opposed to a static system where the state does not change.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define symbols
+t = sp.symbols('t')
+
+# Example of a dynamic system in physics: position of a moving particle
+position = sp.Function('x')(t)
+velocity = sp.diff(position, t)
+acceleration = sp.diff(velocity, t)
+
+# Print the velocity and acceleration of the particle
+print('Velocity:', velocity)
+print('Acceleration:', acceleration)
+```
+
+This example demonstrates how a dynamic system can be mathematically represented, showing how the position, velocity, and acceleration of a particle change over time.
+
+
+::: {.callout-note}
+Because "Dynamic" is context-dependent, verify the intended sense before applying examples or formalizations. Formal content is expressed as Python code using SymPy.
+:::
