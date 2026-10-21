@@ -1,7 +1,7 @@
 /**
  * Wallet service layer.
  *
- * Maps persisted SQLite wallet records to the API domain types.
+ * Maps persisted wallet records to the API domain types.
  */
 
 import { and, desc, eq, getTableColumns, inArray, isNotNull, ne, sql, type SQL } from 'drizzle-orm';
@@ -87,31 +87,10 @@ export function mapUser(row: DbUser): WalletUserProfile {
 // ============================================================================
 
 /**
- * Resolve the primary persisted wallet.
- *
- * Peers (counterparties) are also rows in `users`, so ordering by id alone can
- * pick the wrong wallet. Prefer the KYC-verified wallet that owns transactions,
- * falling back to the oldest row.
- */
-export async function getPrimaryUser(): Promise<WalletUserProfile | null> {
-  const rows = await db
-    .select()
-    .from(usersTable)
-    .orderBy(
-      sql`CASE WHEN ${usersTable.kycStatus} = 'verified' THEN 0 ELSE 1 END`,
-      sql`(SELECT COUNT(*) FROM ${transactionsTable} WHERE ${transactionsTable.userId} = ${usersTable.id}) DESC`,
-      usersTable.id
-    )
-    .limit(1);
-
-  return rows.length > 0 ? mapUser(rows[0]) : null;
-}
-
-/**
  * Resolve a wallet profile by its Solana public key.
  *
  * Used to scope per-session data (contacts, recent recipients) to the wallet
- * the user authenticated with, instead of the single primary user.
+ * the user authenticated with.
  */
 export async function getUserByPubkey(
   publicKey: string
@@ -704,15 +683,6 @@ export async function getWalletSnapshot(userId: number): Promise<WalletSnapshot 
     transactions,
     contacts,
   };
-}
-
-export async function listNotifications(userId: number, limit = 20) {
-  return db
-    .select()
-    .from(notificationsTable)
-    .where(eq(notificationsTable.userId, userId))
-    .orderBy(desc(notificationsTable.createdAt))
-    .limit(limit);
 }
 
 /**

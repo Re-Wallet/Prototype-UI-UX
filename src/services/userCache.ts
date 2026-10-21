@@ -21,7 +21,7 @@ import { eq } from 'drizzle-orm';
 
 import { db } from '../db';
 import { users as usersTable } from '../db/schema';
-import { getCached, invalidate } from './readCache';
+import { getCached } from './readCache';
 
 /**
  * How long a wallet → user id mapping is trusted. Generous on purpose: the
@@ -61,11 +61,4 @@ export async function getUserIdByPubkey(publicKey: string): Promise<number | nul
       shouldCache: (userId) => userId !== null,
     }
   );
-}
-
-/**
- * Drop a wallet's cached id (used when the account is removed or recreated).
- */
-export function invalidateUserId(publicKey: string): void {
-  invalidate(key(publicKey));
 }

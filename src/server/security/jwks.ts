@@ -97,6 +97,15 @@ const DEFAULT_FETCH_TIMEOUT_MS = 5 * 1000;
 const MIN_FETCH_TIMEOUT_MS = 100;
 
 /**
+ * The longest fetch timeout the resolver accepts.
+ *
+ * Without a ceiling a misconfiguration could set the timeout to a day, which
+ * is the same as having no timeout at all — and "no timeout" is exactly what
+ * this resolver exists to prevent.
+ */
+const MAX_FETCH_TIMEOUT_MS = 60 * 1000;
+
+/**
  * Build a key resolver that caches the key set and survives a short outage.
  *
  * The returned function has the shape `jose` expects for a key resolver: it
@@ -112,7 +121,7 @@ export function createCachingJwksResolver(options: JwksResolverOptions): JWTVeri
 
   const requestedTimeout = options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
   const fetchTimeoutMs = Number.isFinite(requestedTimeout)
-    ? Math.max(MIN_FETCH_TIMEOUT_MS, requestedTimeout)
+    ? Math.min(MAX_FETCH_TIMEOUT_MS, Math.max(MIN_FETCH_TIMEOUT_MS, requestedTimeout))
     : DEFAULT_FETCH_TIMEOUT_MS;
 
   const clock = options.now ?? Date.now;
@@ -138,7 +147,18 @@ export function createCachingJwksResolver(options: JwksResolverOptions): JWTVeri
         new Promise<never>((_resolve, reject) => {
           timer = setTimeout(() => {
             controller.abort();
-            reject(new Error(`the JWKS endpoint did not answer within ${fetchTimeoutMs}ms`));
+            // The message names the value the resolver ACTUALLY used. When
+            // the caller asked for something outside the accepted range, the
+            // difference is stated: a timeout of "100ms" that the caller
+            // never asked for is a confusing way to be told "your value was
+            // out of range".
+            const adjusted =
+              requestedTimeout !== fetchTimeoutMs ? ` (asked for ${requestedTimeout}ms)` : '';
+            reject(
+              new Error(
+                `the JWKS endpoint did not answer within ${fetchTimeoutMs}ms${adjusted}`
+              )
+            );
           }, fetchTimeoutMs);
         }),
       ]);

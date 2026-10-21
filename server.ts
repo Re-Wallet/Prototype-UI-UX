@@ -33,7 +33,6 @@ import {
   getWalletSnapshot,
   getUserByPubkey,
   insertPendingTransfer,
-  listNotifications,
   listRecentRecipients,
   listNotificationsWithUnread,
   listTransactions,

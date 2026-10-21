@@ -61,14 +61,13 @@ test('the key set is fetched once and served from the cache', async () => {
     now: () => 0,
   });
 
-  const token = await signToken();
+  await signToken();
   const key = await resolver(HEADER, TOKEN_INPUT);
   assert.ok(key);
   await resolver(HEADER, TOKEN_INPUT);
   await resolver(HEADER, TOKEN_INPUT);
 
   assert.equal(counter.calls, 1);
-  assert.ok(token);
 });
 
 test('a failed refresh keeps serving the cached key set', async () => {
@@ -87,7 +86,7 @@ test('a failed refresh keeps serving the cached key set', async () => {
     }) as unknown as typeof fetch,
   });
 
-  const token = await signToken();
+  await signToken();
   await resolver(HEADER, TOKEN_INPUT);
   healthy = false;
   // The cached set is now past its max age, so the next call refreshes.
@@ -107,7 +106,7 @@ test('an unreachable key set with nothing cached reports the dependency as unava
     now: () => 0,
   });
 
-  const token = await signToken();
+  await signToken();
   await assert.rejects(
     async () => {
       await resolver(HEADER, TOKEN_INPUT);
@@ -129,7 +128,7 @@ test('a failed refresh is not retried inside the cooldown', async () => {
     }) as unknown as typeof fetch,
   });
 
-  const token = await signToken();
+  await signToken();
   await assert.rejects(async () => {
     await resolver(HEADER, TOKEN_INPUT);
   });
@@ -164,7 +163,7 @@ test('a hanging key set is abandoned instead of holding the request open', async
     now: () => 0,
   });
 
-  const token = await signToken();
+  await signToken();
   await assert.rejects(
     async () => {
       await resolver(HEADER, TOKEN_INPUT);
@@ -194,7 +193,7 @@ test('a fetch that ignores the abort signal still loses the race', async () => {
     now: () => 0,
   });
 
-  const token = await signToken();
+  await signToken();
   await assert.rejects(
     async () => {
       await resolver(HEADER, TOKEN_INPUT);
@@ -215,7 +214,7 @@ test('a timeout below the floor is raised instead of aborting every fetch', asyn
     now: () => 0,
   });
 
-  const token = await signToken();
+  await signToken();
   const key = await resolver(HEADER, TOKEN_INPUT);
 
   assert.ok(key);
@@ -230,7 +229,7 @@ test('a key set with no keys is refused', async () => {
     now: () => 0,
   });
 
-  const token = await signToken();
+  await signToken();
   await assert.rejects(
     async () => {
       await resolver(HEADER, TOKEN_INPUT);

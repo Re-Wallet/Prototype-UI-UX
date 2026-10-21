@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { NextFunction, Request, Response } from 'express';
+import type { Request, Response } from 'express';
 
 import {
   createCorsMiddleware,

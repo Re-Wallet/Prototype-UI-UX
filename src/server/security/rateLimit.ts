@@ -151,9 +151,10 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
     hits.set(key, timestamps);
 
     // Evict the least recently seen callers until the table is back under
-    // its cap, then release the ones whose window has passed. Both loops
-    // remove what the table grew, so their cost is bounded by the attacker's
-    // own traffic.
+    // its cap, then release the ones whose window has passed. The eviction
+    // removes exactly what the table grew; the sweep is capped, so it
+    // releases at most MAX_SWEEP_PER_REQUEST entries per request and the
+    // rest wait for the next one. Both costs stay bounded by the traffic.
     while (hits.size > maxKeys) {
       const oldest = hits.keys().next();
       if (oldest.done) break;

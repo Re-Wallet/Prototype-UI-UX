@@ -223,30 +223,6 @@ export async function trySettlePaymentLink(
 }
 
 /**
- * Mark a payment link as paid. Idempotent: only transitions from `active`
- * or `partial` to `paid`; a link already `paid` is returned unchanged.
- *
- * Called by the settle endpoint after on-chain verification confirms the
- * payment, and by the sweeper as a backstop when it observes the
- * reference in a transaction's account keys.
- */
-export async function markPaymentLinkPaid(
-  reference: string,
-  settlement: {
-    paidAmountUsdc: number;
-    paidByPubkey: string;
-    paidTxId: number | null;
-    paidTxSignature?: string | null;
-  }
-): Promise<PaymentLink | null> {
-  const settled = await trySettlePaymentLink(reference, settlement);
-  if (settled) return settled;
-
-  // Already paid or not found — return current state.
-  return getPaymentLinkByReference(reference);
-}
-
-/**
  * List a user's payment links, newest first.
  */
 export async function listPaymentLinks(userId: number, limit = 20): Promise<PaymentLink[]> {

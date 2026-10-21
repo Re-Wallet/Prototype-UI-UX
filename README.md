@@ -876,6 +876,16 @@ the database. Workers Previews give every PR its own URL.
    device → the balance moves.
 7. Monitoring live before the first user is invited.
 
+**The blockers that are not code.** A review cannot fix these, and each one
+blocks a different part of the first cohort:
+
+| Blocker | What it blocks | What it takes |
+|---|---|---|
+| **A paid RPC provider** | payments that "do not arrive" when the public devnet endpoint answers 429 — which reads to the user as a broken app, not a rate limit | a provider with an SLA (the free tiers of Helius or QuickNode cover a first cohort) |
+| **The stable origin** | every payment link already shared, which dies with the tunnel | the custom domain from step 1 |
+| **Dynamic's allowed origins + webhook** | the sign-in and every confirmation | steps 2 and 3 |
+| **A privacy notice** | storing the e-mail and phone of real people (Argentina's *Ley 25.663* applies) | a page and a retention rule, not a code change |
+
 ### Limits that shape the design
 
 Platform limits (Cloudflare, verified 2026-10) and what they mean here:
@@ -926,6 +936,18 @@ Deliberate prototype constraints — tracked, not accidental:
   repair a missed delivery, not to drive the UI.
 - **Devnet only.** USDC mint `4zMMC9…ncDU`; public RPC endpoints are
   rate-limited and have no SLA (the sweeper backs off on 429).
+- **The webhook projection is not one database transaction.** The ledger
+  upsert, the link settlement and the notifications are separate writes, so
+  a failure between them leaves a partial write. It converges, because the
+  upsert and the settlement are idempotent and a delivery that was never
+  projected stays reprojectable — but the window exists, and closing it
+  means threading a transaction executor through the write path. It is a
+  Fase 1 item.
+- **One transaction, two same-token transfers to the same wallet collapse
+  into one row.** The reference key is `<signature>-<symbol>`, so a batch
+  transfer of the same token twice in one transaction keeps only the last
+  one. The webhook and the sweeper build that key together, so changing it
+  means changing both.
 - **i18n is partial.** Onboarding, home chrome, and settings are ES/EN;
   several flows hardcode Spanish.
 
@@ -939,8 +961,9 @@ product loop before infrastructure work. The path to the first beta users:
 2. ~~**Real-time propagation**~~ — **done:** Neon Realtime streams row changes
    to the UI; the sweeper was demoted to a reconciliation job.
 3. ~~**User registration at sign-up**~~ — **done:** the `users` row is created
-   on first Dynamic login, so every account is projectable by the webhook
-   from day one.
+   on the first sign-in, by `POST /api/users/session`, with the address taken
+   from the signed session. Every account is projectable by the webhook from
+   day one.
 4. ~~**Single-use payment links**~~ — **done:** every charge persists a
    `payment_links` row with its on-chain reference, and the link settles
    exactly once; the webhook and the sweeper both reconcile through it.

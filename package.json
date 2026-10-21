@@ -1,7 +1,16 @@
 {
-  "name": "react-example",
+  "name": "rewallet",
   "private": true,
-  "version": "0.0.0",
+  "description": "USDC payments on Solana: a consumer wallet for charging, paying, receiving and withdrawing.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Re-Wallet/Prototype-UI-UX.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=127.0.0.1",
@@ -11,7 +20,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test src/adapters/solana-pay.test.ts src/adapters/payment-verify.test.ts src/services/solanaHistory.test.ts src/services/webPaymentLink.test.ts src/services/survey.test.ts src/services/bugReport.test.ts src/services/ledgerMetrics.test.ts src/services/pendingCharges.test.ts src/services/userProvisioning.test.ts src/services/webhookIngestor.test.ts src/server/security/dynamicSession.test.ts src/server/security/session.test.ts src/server/security/cors.test.ts src/server/security/rateLimit.test.ts src/server/security/headers.test.ts src/server/security/jwks.test.ts src/server/security/apiGate.test.ts",
+    "test": "node --import tsx --test src/adapters/solana-pay.test.ts src/adapters/payment-verify.test.ts src/services/solanaHistory.test.ts src/services/webPaymentLink.test.ts src/services/survey.test.ts src/services/bugReport.test.ts src/services/ledgerMetrics.test.ts src/services/pendingCharges.test.ts src/services/userProvisioning.test.ts src/services/webhookIngestor.test.ts src/server/security/address.test.ts src/server/security/dynamicSession.test.ts src/server/security/session.test.ts src/server/security/cors.test.ts src/server/security/rateLimit.test.ts src/server/security/headers.test.ts src/server/security/jwks.test.ts src/server/security/apiGate.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate",
