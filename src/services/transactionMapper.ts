@@ -30,7 +30,13 @@ const TYPE_TO_UI: Record<string, TransactionType> = {
   received: 'received',
 };
 
-function formatTimestamp(date: Date | null): string {
+/**
+ * Human timestamp for the activity list.
+ *
+ * Exported because the pending charges are painted by the same list and
+ * must read exactly like the movements next to them.
+ */
+export function formatTimestamp(date: Date | null): string {
   if (!date) return 'Just now';
   const diffMs = Date.now() - date.getTime();
   const diffMin = Math.floor(diffMs / 60_000);

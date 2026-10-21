@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGetWalletAccounts, useLogout, useUser } from '@dynamic-labs-sdk/react-hooks';
 import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 import { X } from 'lucide-react';
@@ -35,7 +35,8 @@ import { getStoredLanguage, storeLanguage, subscribeLanguage } from './i18n/lang
 import { DynamicAccountGate } from './components/DynamicAccountGate';
 import { assetBySymbol, chain, type Address } from './adapters';
 import { getWalletTransactions } from './services/solanaHistory';
-import { fetchWalletTransactions } from './services/walletApi';
+import { fetchPaymentLinks, fetchWalletTransactions, type PaymentLinkDto } from './services/walletApi';
+import { toPendingChargeTransactions } from './services/pendingCharges';
 import {
   fetchNotifications,
   fetchWalletBalances,
@@ -46,6 +47,7 @@ import { WebPaymentPage } from './components/WebPaymentPage';
 import { RealtimeProvider } from '@neon/realtime-react';
 import { realtimeClient } from './services/realtimeClient';
 import { LiveTransactionsBridge } from './components/LiveTransactionsBridge';
+import { LivePaymentLinksBridge } from './components/LivePaymentLinksBridge';
 
 /**
  * Merge transaction lists by chain identity (signature + asset), newest
@@ -243,12 +245,64 @@ function WalletApp() {
       if (ticket !== transactionsSeqRef.current) return;
       setTransactions((current) => mergeTransactionLists(current, sourceTransactions));
       setTransactionsError(null);
+
+      // The charges still waiting to be paid, in the same round trip as the
+      // movements: the list shows them as pending and drops them the moment
+      // the webhook settles one.
+      const links = await fetchPaymentLinks(solanaWallet.address as string);
+      if (ticket !== transactionsSeqRef.current) return;
+      if (links) setPaymentLinks(links);
     } catch (error) {
       if (!silent) setTransactionsError(error instanceof Error ? error.message : String(error));
     } finally {
       if (!silent && ticket === transactionsSeqRef.current) setIsTransactionsLoading(false);
     }
   }, [solanaWallet?.address]);
+
+  // The charges this account is waiting to collect. They are links, not
+  // movements: no money moved yet, so they live in the activity list as
+  // pending rows and never touch the balance.
+  const [paymentLinks, setPaymentLinks] = useState<PaymentLinkDto[]>([]);
+  /** The charge the user tapped in the list: it reopens on the QR screen. */
+  const [resumePaymentLink, setResumePaymentLink] = useState<PaymentLinkDto | null>(null);
+
+  /**
+   * What a tap on the activity list does.
+   *
+   * A charge that nobody paid has no receipt to show — there is no
+   * signature and no money moved — so it reopens on the QR screen, ready to
+   * be shared again. Everything else opens its receipt.
+   */
+  const handleSelectActivity = useCallback(
+    (tx: Transaction) => {
+      if (tx.pendingCharge) {
+        const link = paymentLinks.find((item) => item.id === tx.pendingCharge?.id);
+        if (link) {
+          setResumePaymentLink(link);
+          setActiveFlow('transfer');
+          setActiveTab('home');
+        }
+        return;
+      }
+      setSelectedTransaction(tx);
+    },
+    [paymentLinks]
+  );
+
+  /**
+   * The activity list: the movements plus the charges still waiting to be
+   * paid, ordered by date.
+   *
+   * The pending rows are synthesized in the client, so they never reach the
+   * balance or the ledger: a charge is a request, not money that moved.
+   */
+  const activity = useMemo(
+    () =>
+      [...transactions, ...toPendingChargeTransactions(paymentLinks)].sort(
+        (a, b) => b.date.getTime() - a.date.getTime()
+      ),
+    [transactions, paymentLinks]
+  );
 
   // Neon Realtime pushes full authoritative row snapshots after each atomic
   // batch; the shared merge key lets them replace their REST/RPC twins.
@@ -257,6 +311,17 @@ function WalletApp() {
   // on every genuinely new batch we invalidate the cached balance and re-read
   // it from the source. The first batch is the mount snapshot, already
   // covered by the initial load, so it must not trigger a redundant refetch.
+  /**
+   * The charges of this account, live.
+   *
+   * When the webhook settles a link, the charge leaves the pending list and
+   * the movement arrives through the transactions bridge: the row is replaced
+   * by the real transaction without a reload.
+   */
+  const handleLiveLinks = useCallback((links: PaymentLinkDto[]) => {
+    setPaymentLinks(links);
+  }, []);
+
   const liveFingerprintRef = useRef<string | null>(null);
   const handleLiveTransactions = useCallback(
     (rows: Transaction[]) => {
@@ -468,6 +533,9 @@ function WalletApp() {
           }}
           onTransferComplete={handleTransferComplete}
           onSubflowChange={setIsInTransferSubflow}
+          paymentLinks={paymentLinks}
+          resumePaymentLink={resumePaymentLink}
+          onResumePaymentLinkConsumed={() => setResumePaymentLink(null)}
         />
       );
     }
@@ -538,6 +606,9 @@ function WalletApp() {
           }}
           onTransferComplete={handleTransferComplete}
           onSubflowChange={setIsInTransferSubflow}
+          paymentLinks={paymentLinks}
+          resumePaymentLink={resumePaymentLink}
+          onResumePaymentLinkConsumed={() => setResumePaymentLink(null)}
         />
       );
     }
@@ -546,8 +617,8 @@ function WalletApp() {
     if (activeTab === 'activity') {
       return (
         <AllTransactionsModal
-          transactions={transactions}
-          onSelectTransaction={(tx) => setSelectedTransaction(tx)}
+          transactions={activity}
+          onSelectTransaction={handleSelectActivity}
           onClose={() => setActiveTab('home')}
         />
       );
@@ -602,8 +673,8 @@ function WalletApp() {
         />
 
         <RecentTransactions
-          transactions={transactions}
-          onSelectTransaction={(tx) => setSelectedTransaction(tx)}
+          transactions={activity}
+          onSelectTransaction={handleSelectActivity}
           onSeeAll={() => setActiveTab('activity')}
           t={t}
           loading={isTransactionsLoading}
@@ -626,6 +697,15 @@ function WalletApp() {
             <LiveTransactionsBridge
               walletAddress={solanaWallet.address as string}
               onRows={handleLiveTransactions}
+            />
+          )}
+
+          {/* The charges of this account, live. The webhook settles a link
+              and this is what makes the pending row vanish in real time. */}
+          {solanaWallet && realtimeClient && (
+            <LivePaymentLinksBridge
+              walletAddress={solanaWallet.address as string}
+              onLinks={handleLiveLinks}
             />
           )}
 

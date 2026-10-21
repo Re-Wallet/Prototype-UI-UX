@@ -56,7 +56,10 @@ export const RecentTransactions: React.FC<RecentTransactionsProps> = ({
 
             // Subtitle state label
             let stateLabel = '';
-            if (tx.status === 'in_progress') {
+            if (tx.pendingCharge) {
+              // A charge is not a movement in progress: nobody paid it yet.
+              stateLabel = t.pendingCharge;
+            } else if (tx.status === 'in_progress') {
               stateLabel = t.createdInProgress;
             } else if (tx.type === 'sent') {
               stateLabel = t.sentCompleted;

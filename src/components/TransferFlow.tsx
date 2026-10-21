@@ -17,7 +17,6 @@ import {
 } from 'lucide-react';
 import { Keypad } from './Keypad';
 import { CoinIcon } from './CoinIcon';
-import { LivePaymentLinksBridge } from './LivePaymentLinksBridge';
 import { BackToHomeButton } from './BackToHomeButton';
 import { Transaction } from '../types/wallet';
 import { getDynamicClient } from '../dynamicClient';
@@ -48,6 +47,23 @@ interface TransferFlowProps {
   onClose: () => void;
   onTransferComplete: (transaction: Transaction) => void;
   onSubflowChange?: (inSubflow: boolean) => void;
+  /**
+   * The charges of this account, delivered live.
+   *
+   * The app owns the subscription (one for the whole session) and hands the
+   * rows down, so the screen learns the moment its own charge is settled.
+   */
+  paymentLinks?: PaymentLinkDto[];
+  /**
+   * A charge to reopen on the QR screen.
+   *
+   * This is what happens when a pending charge is tapped in the history: the
+   * merchant does not want a receipt for a payment nobody made, they want to
+   * keep sharing the link.
+   */
+  resumePaymentLink?: PaymentLinkDto | null;
+  /** Called once the reopened charge is on screen, so the parent clears it. */
+  onResumePaymentLinkConsumed?: () => void;
 }
 
 export const TransferFlow: React.FC<TransferFlowProps> = ({
@@ -58,6 +74,9 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   onClose,
   onTransferComplete,
   onSubflowChange,
+  paymentLinks,
+  resumePaymentLink,
+  onResumePaymentLinkConsumed,
 }) => {
   // Subflow mode: 'main', 'amount', 'confirm', 'success', 'link_amount', 'link_details'
   const [subflow, setSubflow] = useState<
@@ -106,18 +125,21 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
    */
   const soundPlayedRef = useRef(false);
 
-  const handleLiveLinks = useCallback(
-    (links: PaymentLinkDto[]) => {
-      if (!linkReference) return;
-      const mine = links.find((link) => link.referencePubkey === linkReference);
-      if (!mine) return;
-      setLinkPaid(mine.status === 'paid');
-      if (mine.status === 'paid' && mine.paidTxSignature) {
-        setPaidSignature(mine.paidTxSignature);
-      }
-    },
-    [linkReference]
-  );
+  /**
+   * The live status of the charge this screen is showing.
+   *
+   * The rows arrive from the app's own Realtime subscription, so the screen
+   * flips to "Pago recibido" the moment the webhook settles the link.
+   */
+  useEffect(() => {
+    if (!linkReference || !paymentLinks) return;
+    const mine = paymentLinks.find((link) => link.referencePubkey === linkReference);
+    if (!mine) return;
+    setLinkPaid(mine.status === 'paid');
+    if (mine.status === 'paid' && mine.paidTxSignature) {
+      setPaidSignature(mine.paidTxSignature);
+    }
+  }, [linkReference, paymentLinks]);
 
   const sendAmount = parseFloat(sendAmountStr) || 0;
   const isSendOverBalance = sendAmount > balance;
@@ -346,6 +368,72 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
       setGeneratingQR(false);
     }
   };
+
+  /**
+   * Reopen an existing charge on the QR screen.
+   *
+   * The link already exists: the merchant shared it and nobody paid yet, so
+   * the screen shows the same QR and the same link, ready to be shared
+   * again. Nothing is created and nothing is signed — the reference is the
+   * one the link already carries.
+   */
+  const openExistingLink = useCallback(
+    async (link: PaymentLinkDto) => {
+      setQrError(null);
+      setGeneratingQR(true);
+      try {
+        if (!paymentAsset) {
+          throw new Error(`USDC no está configurado para ${chain.network().cluster}.`);
+        }
+        if (!merchantWallet) {
+          throw new Error('No se encontró la wallet Solana creada para recibir el pago.');
+        }
+        const publicOrigin = (await fetchPublicAppUrl()) || window.location.origin;
+        const url = createWebPaymentUrl(
+          {
+            recipient: merchantWallet,
+            amount: link.amountUsdc,
+            mint: paymentAsset.mint,
+            cluster: chain.network().cluster,
+            message: link.concept,
+            reference: link.referencePubkey,
+          },
+          publicOrigin
+        );
+        const qrDataUrl = await chain.renderQrDataUrl(url);
+
+        setLinkAmountStr(link.amountUsdc ? String(link.amountUsdc) : '0');
+        setConcept(link.concept);
+        setLinkReference(link.referencePubkey);
+        setLinkPaid(link.status === 'paid');
+        setPaidSignature(link.paidTxSignature ?? null);
+        soundPlayedRef.current = false;
+        setPaymentRequest({ url, qrDataUrl });
+        setQrGenerated(true);
+        setSubflow('link_details');
+      } catch (error) {
+        setQrError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setGeneratingQR(false);
+      }
+    },
+    [merchantWallet, paymentAsset]
+  );
+
+  /**
+   * A charge tapped in the history reopens here.
+   *
+   * The parent clears the prop right after, so the effect runs once per
+   * charge and not on every render.
+   */
+  const resumeConsumedRef = useRef<PaymentLinkDto | null>(null);
+  useEffect(() => {
+    if (!resumePaymentLink) return;
+    if (resumeConsumedRef.current === resumePaymentLink) return;
+    resumeConsumedRef.current = resumePaymentLink;
+    void openExistingLink(resumePaymentLink);
+    onResumePaymentLinkConsumed?.();
+  }, [resumePaymentLink, openExistingLink, onResumePaymentLinkConsumed]);
 
   const [recipientValidation, setRecipientValidation] = useState<{ ok: boolean; reason?: string } | null>(null);
 
@@ -606,14 +694,6 @@ export const TransferFlow: React.FC<TransferFlowProps> = ({
   if (subflow === 'link_details') {
     return (
       <div className="flex flex-col h-full text-white px-5 pt-3 pb-8 overflow-y-auto">
-        {/* Live subscription for the generated link. Mounted only while a
-            link exists, so the screen learns the moment it is settled. */}
-        {solanaWallet && linkReference && (
-          <LivePaymentLinksBridge
-            walletAddress={solanaWallet.address}
-            onLinks={handleLiveLinks}
-          />
-        )}
         <div className="flex-1">
           <div className="flex items-center justify-between min-h-[44px] mb-2">
             {qrGenerated && paymentRequest ? (

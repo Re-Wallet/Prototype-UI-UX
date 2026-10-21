@@ -23,6 +23,20 @@ export interface Transaction {
   walletAddress?: string;
   /** Network fee in lamports, when the source (webhook or RPC) reported it. */
   feeLamports?: number;
+  /**
+   * Set when this row is a charge waiting to be paid, not a movement.
+   *
+   * A pending charge is a `payment_links` row, not a `transactions` one: no
+   * money moved yet, so it must not reach the balance or the ledger. The
+   * marker is what tells the list it is a request, and the receipt that it
+   * has no signature to show.
+   */
+  pendingCharge?: {
+    id: number;
+    /** The on-chain reference the payer carries in the transaction. */
+    reference: string;
+    slug: string;
+  };
 }
 
 export interface Contact {

@@ -32,6 +32,53 @@ function getIntent(): WebPaymentIntent | null {
   return parseWebPaymentUrl(window.location.href);
 }
 
+/**
+ * The payment went through.
+ *
+ * Same composition as the request screen: the lockup and the headline
+ * centered, the card full width below. The amount is the one that was
+ * paid, because "it worked" without a number is not a receipt.
+ */
+export function PaymentDone({
+  amount,
+  symbol,
+  signature,
+}: {
+  amount: number;
+  symbol: string;
+  signature: string;
+}) {
+  return (
+    <div className="flex w-full flex-1 flex-col items-center justify-center">
+      <div className="mb-6 text-center">
+        <img
+          alt="ReWallet"
+          className="mx-auto mb-4 h-12 w-auto select-none"
+          src="/rewallet-lockup.png"
+        />
+        <h1 className="text-2xl font-bold leading-tight">Tu pago fue realizado con éxito</h1>
+        {amount > 0 && (
+          <p className="mt-2 text-3xl font-bold tabular-nums text-white">
+            {amount.toFixed(2)} <span className="text-lg text-zinc-400">{symbol}</span>
+          </p>
+        )}
+      </div>
+
+      <div className="w-full rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
+        <CheckCircle2 className="mx-auto mb-3 h-12 w-12 text-emerald-400" />
+        <a
+          className="break-all text-sm text-emerald-200 underline hover:text-emerald-100 transition-colors"
+          href={chain.explorerTxUrl(signature)}
+          rel="noreferrer"
+          target="_blank"
+        >
+          Ver firma en el explorador
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitted }) => {
   const intent = useMemo(getIntent, []);
   const { data: initStatus } = useInitStatus();
@@ -250,29 +297,11 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
         </div>
       ) : signature ? (
         <>
-          <div className="flex w-full flex-1 flex-col items-center justify-center">
-            <div className="mb-6 text-center">
-              <img
-                alt="ReWallet"
-                className="mx-auto mb-4 h-12 w-auto select-none"
-                src="/rewallet-lockup.png"
-              />
-              <h1 className="text-2xl font-bold">Solicitud de pago</h1>
-            </div>
-
-            <div className="w-full rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-6 text-center">
-              <CheckCircle2 className="mx-auto mb-3 h-12 w-12 text-emerald-400" />
-              <p className="mb-3 text-lg font-semibold text-emerald-300">Transacción enviada a Solana</p>
-              <a
-                className="break-all text-sm text-emerald-200 underline hover:text-emerald-100 transition-colors"
-                href={chain.explorerTxUrl(signature)}
-                rel="noreferrer"
-                target="_blank"
-              >
-                Ver firma en el explorador
-              </a>
-            </div>
-          </div>
+          <PaymentDone
+            amount={amount}
+            symbol={asset?.symbol ?? 'USDC'}
+            signature={signature}
+          />
 
           <BackToHomeButton onClick={closePaymentPage} />
         </>

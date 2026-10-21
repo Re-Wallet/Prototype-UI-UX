@@ -32,6 +32,8 @@ export interface Translations {
   receivedCompleted: string;
   withdrawnCompleted: string;
   depositedCompleted: string;
+  /** A charge that was generated and is still waiting to be paid. */
+  pendingCharge: string;
 
   // Profile / Settings
   profileTitle: string;
@@ -148,6 +150,7 @@ export const translations: Record<Language, Translations> = {
     receivedCompleted: 'Recibido · Completado',
     withdrawnCompleted: 'Retiro · Completed',
     depositedCompleted: 'Depositado · Completado',
+    pendingCharge: 'Esperando pago',
 
     profileTitle: 'Perfil de Usuario',
     email: 'Correo',
@@ -251,11 +254,12 @@ export const translations: Record<Language, Translations> = {
     recents: 'Recents',
     seeAll: 'See All',
     noTransactions: 'No recent transactions',
-    createdInProgress: 'Creado · En proceso',
-    sentCompleted: 'Enviado · Completado',
-    receivedCompleted: 'Recibido · Completado',
+    createdInProgress: 'Created · In progress',
+    sentCompleted: 'Sent · Completed',
+    receivedCompleted: 'Received · Completed',
     withdrawnCompleted: 'Withdrawn · Completed',
-    depositedCompleted: 'Depositado · Completado',
+    depositedCompleted: 'Deposited · Completed',
+    pendingCharge: 'Awaiting payment',
 
     profileTitle: 'User Profile',
     email: 'Email',
