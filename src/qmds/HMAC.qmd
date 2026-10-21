@@ -1,0 +1,110 @@
+---
+title: "HMAC Disambiguation"
+description: "Multidisciplinary analysis of the term 'HMAC'."
+author: "Ollama Swarm + Laya"
+date: "2026-10-20"
+lang: en
+categories: [Disambiguation, Swarm]
+format: html
+toc: true
+math: false
+bibliography: ReferencesBib
+csl: IeeeCsl
+cite-method: citeproc
+generator-script: "generate-note-swarm-v16.sh"
+---
+
+## Sense 1: Linguistic Sense
+
+### Def
+HMAC stands for "Hash-based Message Authentication Code". It is a cryptographic technique used to verify the authenticity and integrity of a message.
+
+### CTP
+HMAC combines a cryptographic hash function with a secret key to generate a unique message digest. This digest can be used to verify that the message has not been tampered with during transmission.
+
+### Ex
+Imagine Alice wants to send a secret message to Bob. Alice uses HMAC to generate a unique digest of her message and sends it to Bob along with the message. Bob then uses the same secret key and hash function to calculate the digest of the received message. If the calculated digest matches the received digest, Bob can be confident that the message is authentic and has not been altered.
+
+## Sense 2: Logical Sense
+
+### Def
+HMAC (Hash-based Message Authentication Code) is a cryptographic function that takes a variable-length message and a secret key as inputs, producing a fixed-length output called a "tag". The tag is used to verify the authenticity and integrity of the message. The process involves hashing the message with the key in a way that is computationally infeasible to reverse without the key, ensuring that only the entity that knows the secret key can generate a valid tag.
+
+### CTP
+1. **Necessity of Secret Key**: The use of a secret key is necessary for the tag to be computationally bound to the message, ensuring that only authorized parties can verify the message's authenticity.
+2. **Integrity and Authentication**: The tag serves as a proof of authenticity and integrity, as any alteration to the message or tag would result in a different output when re-hashed with the secret key.
+3. **Fixed-Length Tag**: The tag produced by HMAC has a fixed length, which is determined by the underlying hash function used (e.g., SHA-256 produces a 256-bit tag).
+4. **Resistant to Length Extension**: HMAC is designed to be resistant to length extension attacks, meaning that an attacker cannot predict the output of re-hashing a message with an unknown additional suffix.
+
+### Ex
+**Example**: Suppose Alice wants to send a message "Hello, World!" to Bob using HMAC with a secret key "ABC123". Alice follows these steps:
+
+1. **Hash the Message with the Secret Key**: Alice first appends the secret key to the message and then hashes the combined string using a secure hash function (e.g., SHA-256).
+2. **Produce the Tag**: The output of the hash function is the tag, which Alice then sends along with the original message.
+3. **Verification at Bob's End**: Bob receives the message and tag. He appends the secret key to the received message and hashes the combined string. If the output matches the received tag, Bob knows the message is authentic and has not been tampered with.
+
+This example demonstrates how HMAC ensures the authenticity and integrity of a message using a secret key. The tag acts as a unique identifier for each message-appropriate secret key pair, making it computationally infeasible for an attacker to produce a valid tag without the secret key.
+
+```{python}
+#| eval: false
+import sympy as sp
+
+# Define logical variables
+A = sp.symbols('A')  # A represents the necessity of a secret key
+B = sp.symbols('B')  # B represents the fixed-length tag
+C = sp.symbols('C')  # C represents the resistance to length extension
+
+# Logical sense of HMAC
+hmac_logic = sp.Implies(A, sp.Implies(B, C))
+
+# Example: HMAC ensures the authenticity and integrity of a message using a secret key
+# A (secret key) -> B (fixed-length tag) -> C (resistance to length extension)
+example = """
+Alice wants to send a message "Hello, World!" to Bob using HMAC with a secret key "ABC123".
+Alice:
+1. Hashes the message with the secret key.
+2. Produces a tag.
+Bob:
+1. Receives the message and tag.
+2. Hashes the received message with the secret key.
+3. Verifies the tag.
+"""
+
+print(hmac_logic)
+print(example)
+```
+
+## Sense 3: General Sense
+
+### Def
+HMAC (Hash-based Message Authentication Code) is a mechanism for message authentication that uses a cryptographic hash function and a secret key to generate a message authentication code. The HMAC ensures that a message has not been altered in transit and that it was sent by someone who knows the secret key.
+
+### CTP
+HMAC is based on a hash function and a secret key. It involves the following core principles:
+- **Keying**: HMAC uses a secret key to ensure that only parties who know the key can generate valid MACs.
+- **Hash Function**: HMAC employs a cryptographic hash function to produce a fixed-size output from variable-length input.
+- **Security**: HMAC is designed to be secure against various attacks, such as forgery and tampering.
+
+### Ex
+Suppose you want to send a message "Hello, World!" and ensure its integrity and authenticity. You have a secret key "mysecretkey". Here’s how you can generate and verify an HMAC using Python:
+
+```{python}
+#| eval: false
+import hmac
+import hashlib
+
+message = b"Hello, World!"
+key = b"mysecretkey"
+
+# Generate HMAC
+hmac_value = hmac.new(key, message, hashlib.sha256).hexdigest()
+
+print("HMAC:", hmac_value)
+```
+
+In this example, the `hmac.new` function generates an HMAC using the SHA-256 hash function. The generated HMAC value can be sent along with the message. The recipient can then use the same secret key to verify the integrity and authenticity of the message.
+
+
+::: {.callout-note}
+Because "HMAC" is context-dependent, verify the intended sense before applying examples or formalizations. Formal content is expressed as Python code using SymPy.
+:::
