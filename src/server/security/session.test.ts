@@ -19,6 +19,7 @@ import {
   walletFromQuery,
 } from './session';
 import type { DynamicSessionClaims, SessionVerifier } from './dynamicSession';
+import { SessionUnavailableError } from './jwks';
 
 const WALLET = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM';
 const OTHER_WALLET = '7cVfgArCheMR6CsD3b4UfWqB3wbcJgTyaQTuo1cNkD7V';
@@ -109,6 +110,32 @@ test('a request with a rejected credential is answered 401', async () => {
 
   assert.equal(recorder.statusCode, 401);
   assert.equal((recorder.body as { reason: string }).reason, 'malformed_token');
+});
+
+test('a session service that is down answers 503, not 401', async () => {
+  const { res, recorder } = fakeResponse();
+  const next: NextFunction = () => {
+    throw new Error('the request must not continue');
+  };
+  const unavailable: SessionVerifier = {
+    async verify(): Promise<DynamicSessionClaims> {
+      throw new SessionUnavailableError('the key set is unreachable');
+    },
+  };
+
+  // A credential has to be present, or the request stops at the "no token"
+  // check and never reaches the verifier that is down.
+  requireSession(unavailable)(
+    fakeRequest({ headers: { authorization: 'Bearer some-token' } }),
+    res,
+    next
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // A broken dependency must not look like an expired session: 401 would
+  // send every user through a re-login.
+  assert.equal(recorder.statusCode, 503);
+  assert.equal((recorder.body as { reason: string }).reason, 'auth_unavailable');
 });
 
 test('a valid credential attaches the session and continues', async () => {

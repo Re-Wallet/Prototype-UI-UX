@@ -242,4 +242,40 @@ the suite before the commit):
   scope check are verified against a local key set; the live JWKS endpoint
   has to be confirmed in staging.
 
+### Progress — 2026-10-21 (work unit 3 — native review and corrections)
+
+**The native review ran on the whole Phase 0 range** (`5c53aa3..fc54bec`),
+risk `high`, four lenses (risk, resilience, readability, reliability), with the
+user's explicit consent. The first pass was refused twice on the readability
+lens: once for citing three line ranges in a single `location` field, once
+for narrating instead of emitting the JSON. The third attempt was admitted.
+
+**Result**: 3 findings corroborated, 1 escalated with unknown causality, the
+rest refuted. The native transaction ended in `stop` /
+`native_stop_required` with the action *informational* — delivery stays a
+human decision, but the corroborated findings are real defects in this
+change, so they were fixed.
+
+| Finding | Severity | Disposition | Fix |
+|---|---|---|---|
+| R2-005 — `isForEnvironment` matched the issuer by **substring**, so an environment whose id *contains* ours (`env-1` vs `env-12`) would have been accepted | corroborated | security | The claim is compared exactly; the issuer is compared by its **last path segment**, exactly; a token that names no environment is rejected |
+| R4-1 — a JWKS fetch failure answered `401` to every logged-in user, which reads as "your session expired" and triggers a re-login storm | corroborated | resilience | New `src/server/security/jwks.ts`: the key set is cached for 10 minutes, **keeps working for a day after a failed refresh**, and a cold isolate raises `SessionUnavailableError` → the API answers **503 `auth_unavailable`**, not 401 |
+| R4-2 — the rate limiter's `prune()` scanned the whole table on every request once it was over the cap, so a flood of unique callers turned one request into an O(n) sweep | corroborated | DoS | The global prune is gone. The table is evicted least-recently-seen first, and the eviction is amortized: a request removes what it added, never the whole table |
+| R2-002 — four rate-limit tiers used unexplained magic numbers (10/30/60/120) | escalated, causality unknown | readability | The tiers are named constants and each one carries the reason for its value (what the route *costs*, not what it returns). The finding was filed CRITICAL by a readability lens; by the severity rules it is at most WARNING — no observable harm, no regression — but the point is fair and cheap to honour |
+
+Also honoured from the non-blocking readability findings, because they were
+cheap and correct: the `BASE58_RE` rule now lives in one module
+(`src/server/security/address.ts`) instead of three copies; the middleware's
+doc comment described the check order backwards and now states the real one
+(authenticate → parse the address → check ownership); the client's
+`sessionToken()` reports a missing Dynamic client once instead of swallowing
+it silently; and the CSP's `style-src 'unsafe-inline'` weakening is now
+stated in the README instead of hiding in a comment.
+
+**After the corrections**: `npm test` → **113 tests, 113 pass, 0 fail** (65
+new since the base, 76 since Phase 0), `npm run lint` → clean. The three new
+tests that pin the corrections: a sibling environment whose id contains ours
+is rejected, a failed JWKS refresh keeps serving the cached key set, and a
+session service that is down answers 503 rather than 401.
+
 

@@ -4,27 +4,29 @@
  * The order is deliberate and it is the whole point of this module:
  *
  *   1. `requireSession`      → 401. No credential, no request.
+ *                              503 when the session service itself is down:
+ *                              a broken dependency is not a bad credential.
  *   2. `requireOwnedWallet`  → 400 for a malformed address,
  *                              403 for an address this session does not own.
  *
- * Authentication comes before authorization, and authorization comes before
- * validation: a caller who cannot prove who they are has no business being
- * told whether the parameter they sent was well formed.
+ * Authentication comes first: a caller who cannot prove who they are has no
+ * business being told anything about the wallet they asked for. Then the
+ * address has to be well formed — an address that cannot be parsed cannot be
+ * owned by anybody — and only then is ownership checked.
  *
- * Both checks run **before** any database call, so an unauthenticated
+ * All of it runs **before** any database call, so an unauthenticated
  * request costs one signature verification and nothing else.
  */
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
+import { BASE58_RE } from './address';
 import {
   SessionVerificationError,
   type DynamicSessionClaims,
   type SessionVerifier,
 } from './dynamicSession';
-
-/** A base58 Solana address: 32-44 characters, no 0 O I l. */
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+import { SessionUnavailableError } from './jwks';
 
 /** A JWT is three base64url segments separated by dots. */
 const JWT_SHAPE_RE = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
@@ -84,7 +86,9 @@ export function extractSessionToken(req: Request): string | null {
  * Require a verified session.
  *
  * A missing or unusable credential is a `401` with a reason code the client
- * can act on (re-authenticate) and nobody else can learn from.
+ * can act on (re-authenticate) and nobody else can learn from. A session
+ * service that is *down* is a `503`: answering 401 there would tell every
+ * user their session expired and send the whole base through a re-login.
  */
 export function requireSession(verifier: SessionVerifier): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -101,6 +105,14 @@ export function requireSession(verifier: SessionVerifier): RequestHandler {
         next();
       })
       .catch((error: unknown) => {
+        if (error instanceof SessionUnavailableError) {
+          console.error('[auth] the session key set is unavailable:', error.message);
+          res.status(503).json({
+            error: 'The session service is temporarily unavailable.',
+            reason: 'auth_unavailable',
+          });
+          return;
+        }
         const reason =
           error instanceof SessionVerificationError ? error.reason : 'malformed_token';
         res.status(401).json({ error: 'Invalid or expired session.', reason });
@@ -112,7 +124,9 @@ export function requireSession(verifier: SessionVerifier): RequestHandler {
  * Require that the session controls the wallet the request names.
  *
  * `read` pulls the address out of wherever the route keeps it (a query
- * parameter for reads, a body field for writes).
+ * parameter for reads, a body field for writes). The address is validated
+ * before the ownership check: an address that cannot be parsed cannot be
+ * owned by anybody, so there is nothing to authorize.
  */
 export function requireOwnedWallet(read: (req: Request) => unknown): RequestHandler {
   return (req: Request, res: Response, next: NextFunction): void => {

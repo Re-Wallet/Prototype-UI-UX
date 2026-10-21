@@ -33,13 +33,13 @@
  * a fact we already have.
  */
 
-import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
+import { errors, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose';
+
+import { BASE58_RE } from './address';
+import { createCachingJwksResolver, SessionUnavailableError } from './jwks';
 
 /** Where Dynamic publishes the signing keys for an environment. */
 const DEFAULT_JWKS_BASE = 'https://app.dynamicauth.com/api/v0/sdk';
-
-/** A base58 Solana address: 32-44 characters, no 0 O I l. */
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 /** The scope a session must carry to be treated as a person. */
 const REQUIRED_SCOPE = 'user:basic';
@@ -51,7 +51,8 @@ export type SessionFailureReason =
   | 'invalid_signature'
   | 'expired_token'
   | 'wrong_environment'
-  | 'insufficient_scope';
+  | 'insufficient_scope'
+  | 'auth_unavailable';
 
 /** A session that could not be verified. */
 export class SessionVerificationError extends Error {
@@ -101,20 +102,18 @@ export function dynamicJwksUrl(environmentId: string): string {
 /**
  * Build the verifier for this deployment.
  *
- * The JWKS is cached by `jose` for ten minutes and refreshed on demand when
- * a token arrives with an unknown `kid`, so a key rotation by Dynamic does
- * not require a redeploy.
+ * The key set is cached for ten minutes and refreshed on demand when a token
+ * arrives with an unknown `kid`, so a key rotation by Dynamic does not
+ * require a redeploy. When the endpoint is unreachable the cached set keeps
+ * working for a while, and a cold isolate reports the dependency as
+ * unavailable rather than as a rejected session.
  */
 export function createDynamicSessionVerifier(options: SessionVerifierOptions): SessionVerifier {
   const { environmentId, clockToleranceSeconds = 5 } = options;
 
   const keyResolver =
     options.keyResolver ??
-    createRemoteJWKSet(new URL(options.jwksUrl ?? dynamicJwksUrl(environmentId)), {
-      cacheMaxAge: 10 * 60 * 1000,
-      cooldownDuration: 30 * 1000,
-      timeoutDuration: 5 * 1000,
-    });
+    createCachingJwksResolver({ url: options.jwksUrl ?? dynamicJwksUrl(environmentId) });
 
   return {
     async verify(token: string): Promise<DynamicSessionClaims> {
@@ -171,6 +170,11 @@ export function createDynamicSessionVerifier(options: SessionVerifierOptions): S
  * credential, never anything about the account behind it.
  */
 function toVerificationError(error: unknown): SessionVerificationError {
+  if (error instanceof SessionUnavailableError) {
+    // The key set could not be fetched. That is a broken dependency, not a
+    // rejected credential, and the API answers 503 for it.
+    throw error;
+  }
   if (error instanceof errors.JWTExpired) {
     return new SessionVerificationError('expired_token', 'The session has expired.');
   }
@@ -193,21 +197,28 @@ function toVerificationError(error: unknown): SessionVerificationError {
  * Is this token for our environment?
  *
  * The signature already binds it — the key set belongs to one environment —
- * so this is the second lock on the same door. When the token names its
- * environment, that name has to be ours. The issuer is only consulted when
- * the token does not carry the claim, and then it is matched by containment,
- * because Dynamic has used more than one issuer shape.
+ * so this is the second lock on the same door. The comparison is **exact**:
+ *
+ * - The `environmentId` claim, when present, has to equal ours.
+ * - Otherwise the issuer's last path segment has to equal ours. A substring
+ *   match would accept a token from an environment whose id merely
+ *   *contains* ours (`env-1` against `env-12`), which is exactly the
+ *   cross-environment acceptance this check exists to prevent.
+ * - With neither a claim nor a usable issuer, the token is rejected: a
+ *   session that cannot say which environment minted it is not one this
+ *   deployment should honour.
  */
 function isForEnvironment(payload: JWTPayload, environmentId: string): boolean {
+  if (!environmentId) return false;
+
   const claimed = typeof payload.environmentId === 'string' ? payload.environmentId : '';
   if (claimed) return claimed === environmentId;
 
   const issuer = typeof payload.iss === 'string' ? payload.iss : '';
-  if (issuer) return issuer.includes(environmentId);
+  if (!issuer) return false;
 
-  // The token names no environment at all. The key set already did the
-  // binding, so there is nothing left to check.
-  return true;
+  const segment = issuer.split('/').filter(Boolean).pop() ?? '';
+  return segment === environmentId;
 }
 
 /**

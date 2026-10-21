@@ -92,6 +92,52 @@ test('a session for a different environment is rejected', async () => {
   );
 });
 
+test('an environment whose id merely contains ours is rejected', async () => {
+  // `env-1` is a substring of `env-12`. A substring comparison would let a
+  // session from a sibling environment through, which is exactly what the
+  // environment binding exists to prevent.
+  const sibling = createDynamicSessionVerifier({
+    environmentId: 'env-1',
+    keyResolver,
+  });
+  const token = await signToken(
+    { environmentId: 'env-12', scope: 'user:basic' },
+    { issuer: 'app.dynamicauth.com/env-12' }
+  );
+
+  await assert.rejects(
+    () => sibling.verify(token),
+    (error: unknown) =>
+      error instanceof SessionVerificationError && error.reason === 'wrong_environment'
+  );
+});
+
+test('without the environment claim the issuer has to name our environment exactly', async () => {
+  const other = await signToken(
+    { scope: 'user:basic' },
+    { issuer: 'app.dynamicauth.com/env-other' }
+  );
+  await assert.rejects(
+    () => verifier.verify(other),
+    (error: unknown) =>
+      error instanceof SessionVerificationError && error.reason === 'wrong_environment'
+  );
+
+  const ours = await signToken({ scope: 'user:basic' }, { issuer: `app.dynamicauth.com/${ENVIRONMENT_ID}` });
+  const claims = await verifier.verify(ours);
+  assert.equal(claims.dynamicUserId, 'dyn-user-1');
+});
+
+test('a session that names no environment at all is rejected', async () => {
+  const token = await signToken({ scope: 'user:basic' }, { issuer: '' });
+
+  await assert.rejects(
+    () => verifier.verify(token),
+    (error: unknown) =>
+      error instanceof SessionVerificationError && error.reason === 'wrong_environment'
+  );
+});
+
 test('a session without the user:basic scope is rejected', async () => {
   const token = await signToken(sessionClaims({ scope: 'profile' }));
 

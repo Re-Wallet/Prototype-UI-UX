@@ -60,6 +60,12 @@ export function clientIp(req: Request): string {
  * The window is a sliding one: the timestamps of the requests still inside
  * the window are kept, and the limit applies to how many there are. A fixed
  * window would let a caller send twice the limit across a boundary.
+ *
+ * The table of callers is bounded, and the bound is enforced by evicting the
+ * least recently seen key. The eviction is **amortized**: a request removes
+ * at most the entries it added, and never scans the whole table. A flood of
+ * unique callers therefore cannot turn one request into an O(n) sweep — the
+ * table is the attacker's to grow, and the cost of growing it stays O(1).
  */
 export function createRateLimiter(options: RateLimitOptions): RequestHandler {
   const { limit, windowMs, maxKeys = 10_000 } = options;
@@ -67,15 +73,6 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
   const clock = options.now ?? Date.now;
 
   const hits = new Map<string, number[]>();
-
-  const prune = (now: number): void => {
-    const windowStart = now - windowMs;
-    for (const [key, timestamps] of hits) {
-      const live = timestamps.filter((timestamp) => timestamp > windowStart);
-      if (live.length === 0) hits.delete(key);
-      else if (live.length !== timestamps.length) hits.set(key, live);
-    }
-  };
 
   return (req: Request, res: Response, next: import('express').NextFunction): void => {
     const now = clock();
@@ -94,17 +91,18 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
     }
 
     timestamps.push(now);
+    // Re-insert so the Map's iteration order is "least recently seen first",
+    // which is what the eviction below relies on.
+    hits.delete(key);
     hits.set(key, timestamps);
 
-    // Keep the map bounded: a long-lived process must not grow a table of
-    // every address that ever called.
-    if (hits.size > maxKeys) {
-      prune(now);
-      while (hits.size > maxKeys) {
-        const oldest = hits.keys().next();
-        if (oldest.done) break;
-        hits.delete(oldest.value);
-      }
+    // Evict the least recently seen callers until the table is back under
+    // its cap. The loop removes as many entries as the table grew over the
+    // cap, so its cost is bounded by the attacker's own traffic.
+    while (hits.size > maxKeys) {
+      const oldest = hits.keys().next();
+      if (oldest.done) break;
+      hits.delete(oldest.value);
     }
 
     next();

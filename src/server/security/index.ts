@@ -43,3 +43,11 @@ export {
   securityHeaders,
   type SecurityHeaderOptions,
 } from './headers';
+
+export { BASE58_RE, isBase58Address } from './address';
+
+export {
+  createCachingJwksResolver,
+  SessionUnavailableError,
+  type JwksResolverOptions,
+} from './jwks';

@@ -75,6 +75,7 @@ import { eq } from 'drizzle-orm';
 import { db, pool, warmPool } from './src/db';
 import { landingSurveyResponses, users as usersTable } from './src/db/schema';
 import {
+  BASE58_RE,
   createCorsMiddleware,
   createDynamicSessionVerifier,
   createRateLimiter,
@@ -113,9 +114,6 @@ const HOST = process.env.API_HOST ?? '127.0.0.1';
 interface RawBodyRequest extends Request {
   rawBody?: Buffer;
 }
-
-// Base58 pubkey check: Solana addresses are 32-44 chars of the base58 alphabet.
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 app.use(
   express.json({
@@ -171,18 +169,39 @@ const allowedOrigins = [
 const sessionGate = (read: (req: Request) => unknown) => requireSessionFor(sessionVerifier, read);
 
 /**
- * Rate limits.
+ * Rate limits, in requests per minute, per caller.
  *
- * The claim endpoint is the tight one: it spends the shared Solana RPC
- * budget on behalf of whoever calls it, and that budget is what the real
- * users' balance reads live on. These counters live in the process, so the
- * authoritative limit is a Cloudflare WAF rule at the edge; this is the
+ * The tiers follow what each route actually *costs*, not what it returns:
+ *
+ * - `CLAIM` (10): the endpoint verifies the transfer on-chain with up to
+ *   seven paced RPC reads, so it is the one route where a caller spends the
+ *   shared Solana RPC budget. Ten a minute leaves room for a real payer
+ *   retrying a slow transaction and still stops a spammer.
+ * - `CREATE_LINK` (30): a merchant creates charge links in bursts while
+ *   preparing an invoice, but never in the hundreds.
+ * - `WRITE` (60): marking notifications read or saving a contact is cheap,
+ *   and the app batches them behind a poll.
+ * - `READ` (120): the poll alone is two requests a minute per open tab, so
+ *   the read tier has to leave room for several tabs plus the focus
+ *   refetches.
+ *
+ * These counters live in the process, so the authoritative limit is a
+ * Cloudflare WAF rate-limiting rule at the edge; this is the
  * application-level floor.
  */
-const claimRateLimit = createRateLimiter({ limit: 10, windowMs: 60_000 });
-const createLinkRateLimit = createRateLimiter({ limit: 30, windowMs: 60_000 });
-const writeRateLimit = createRateLimiter({ limit: 60, windowMs: 60_000 });
-const readRateLimit = createRateLimiter({ limit: 120, windowMs: 60_000 });
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const CLAIM_RATE_LIMIT = 10;
+const CREATE_LINK_RATE_LIMIT = 30;
+const WRITE_RATE_LIMIT = 60;
+const READ_RATE_LIMIT = 120;
+
+const claimRateLimit = createRateLimiter({ limit: CLAIM_RATE_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS });
+const createLinkRateLimit = createRateLimiter({
+  limit: CREATE_LINK_RATE_LIMIT,
+  windowMs: RATE_LIMIT_WINDOW_MS,
+});
+const writeRateLimit = createRateLimiter({ limit: WRITE_RATE_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS });
+const readRateLimit = createRateLimiter({ limit: READ_RATE_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS });
 
 // Security headers first, so every response carries them — including the
 // preflight answers below.

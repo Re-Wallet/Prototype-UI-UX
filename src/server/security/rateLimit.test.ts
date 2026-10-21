@@ -101,6 +101,45 @@ test('the window slides: an old hit stops counting', () => {
   assert.equal(recorder.statusCode, 200);
 });
 
+test('the table of callers stays bounded', () => {
+  const recorder = fakeResponse();
+  const limiter = createRateLimiter({ limit: 10, windowMs: 60_000, maxKeys: 5, now: () => 0 });
+
+  const next: NextFunction = () => {
+    recorder.continued += 1;
+  };
+  for (let i = 0; i < 50; i += 1) {
+    limiter(fakeRequest(`10.0.0.${i}`), recorder.res, next);
+  }
+
+  // 50 distinct callers, a table that holds 5: the flood is absorbed instead
+  // of growing a table the attacker controls.
+  assert.equal(recorder.continued, 50);
+  assert.equal(recorder.statusCode, 200);
+});
+
+test('the eviction takes the least recently seen caller, not the busiest one', () => {
+  const recorder = fakeResponse();
+  const limiter = createRateLimiter({ limit: 1, windowMs: 60_000, maxKeys: 2, now: () => 0 });
+
+  const next: NextFunction = () => {};
+  // A and B are inside their limit; touching A again makes B the oldest.
+  limiter(fakeRequest('a'), recorder.res, next);
+  limiter(fakeRequest('b'), recorder.res, next);
+  limiter(fakeRequest('a'), recorder.res, next);
+  // C overflows the table, so B is evicted.
+  limiter(fakeRequest('c'), recorder.res, next);
+
+  // A still has its counter, so it is still limited.
+  limiter(fakeRequest('a'), recorder.res, next);
+  assert.equal(recorder.statusCode, 429);
+
+  // B was evicted, so its counter is gone and it is allowed again.
+  const afterB = fakeResponse();
+  limiter(fakeRequest('b'), afterB.res, next);
+  assert.equal(afterB.statusCode, 200);
+});
+
 test('the Cloudflare header identifies the caller, not the proxy', () => {
   const req = { headers: { 'cf-connecting-ip': '203.0.113.7' }, ip: '10.0.0.1' } as unknown as Request;
   assert.equal(clientIp(req), '203.0.113.7');

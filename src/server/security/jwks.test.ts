@@ -1,0 +1,164 @@
+/**
+ * The cached key resolver.
+ *
+ * Everything here is hermetic: the key pair is generated in the test, the
+ * JWKS is served by a stub fetch, and the clock is injected.
+ */
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
+
+import { createCachingJwksResolver, SessionUnavailableError } from './jwks';
+
+const URL_UNDER_TEST = 'https://example.test/.well-known/jwks';
+
+/** The protected header every test token carries. */
+const HEADER = { alg: 'RS256', kid: 'test-key' };
+
+/**
+ * The flattened token `jose` hands to a key resolver. The local resolver
+ * only reads the protected header, so the body is a placeholder.
+ */
+const TOKEN_INPUT = { payload: '', signature: '' };
+
+const { privateKey, publicKey } = await generateKeyPair('RS256');
+const publicJwk: JWK = { ...(await exportJWK(publicKey)), kid: 'test-key', alg: 'RS256', use: 'sig' };
+
+/** Sign a token the resolver can find a key for. */
+async function signToken(): Promise<string> {
+  return await new SignJWT({ sub: 'dyn-user-1' })
+    .setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+    .setIssuedAt()
+    .setExpirationTime('2h')
+    .sign(privateKey);
+}
+
+/** A fetch stub that always answers with the key set. */
+function okFetch(counter: { calls: number }): typeof fetch {
+  return (async () => {
+    counter.calls += 1;
+    return new Response(JSON.stringify({ keys: [publicJwk] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+}
+
+/** A fetch stub that always fails. */
+function failingFetch(): typeof fetch {
+  return (async () => {
+    throw new Error('the network is down');
+  }) as unknown as typeof fetch;
+}
+
+test('the key set is fetched once and served from the cache', async () => {
+  const counter = { calls: 0 };
+  const resolver = createCachingJwksResolver({
+    url: URL_UNDER_TEST,
+    fetchImpl: okFetch(counter),
+    now: () => 0,
+  });
+
+  const token = await signToken();
+  const key = await resolver(HEADER, TOKEN_INPUT);
+  assert.ok(key);
+  await resolver(HEADER, TOKEN_INPUT);
+  await resolver(HEADER, TOKEN_INPUT);
+
+  assert.equal(counter.calls, 1);
+  assert.ok(token);
+});
+
+test('a failed refresh keeps serving the cached key set', async () => {
+  const counter = { calls: 0 };
+  let healthy = true;
+  let now = 0;
+  const resolver = createCachingJwksResolver({
+    url: URL_UNDER_TEST,
+    maxAgeMs: 1000,
+    staleMs: 60_000,
+    now: () => now,
+    fetchImpl: (async () => {
+      counter.calls += 1;
+      if (!healthy) throw new Error('the network is down');
+      return new Response(JSON.stringify({ keys: [publicJwk] }), { status: 200 });
+    }) as unknown as typeof fetch,
+  });
+
+  const token = await signToken();
+  await resolver(HEADER, TOKEN_INPUT);
+  healthy = false;
+  // The cached set is now past its max age, so the next call refreshes.
+  now = 5000;
+
+  // The cached set is past its max age, so a refresh is attempted — and it
+  // fails. The cached set still answers.
+  const key = await resolver(HEADER, TOKEN_INPUT);
+  assert.ok(key);
+  assert.equal(counter.calls, 2);
+});
+
+test('an unreachable key set with nothing cached reports the dependency as unavailable', async () => {
+  const resolver = createCachingJwksResolver({
+    url: URL_UNDER_TEST,
+    fetchImpl: failingFetch(),
+    now: () => 0,
+  });
+
+  const token = await signToken();
+  await assert.rejects(
+    async () => {
+      await resolver(HEADER, TOKEN_INPUT);
+    },
+    (error: unknown) => error instanceof SessionUnavailableError
+  );
+});
+
+test('a failed refresh is not retried inside the cooldown', async () => {
+  const counter = { calls: 0 };
+  let now = 1000;
+  const resolver = createCachingJwksResolver({
+    url: URL_UNDER_TEST,
+    cooldownMs: 30_000,
+    now: () => now,
+    fetchImpl: (async () => {
+      counter.calls += 1;
+      throw new Error('the network is down');
+    }) as unknown as typeof fetch,
+  });
+
+  const token = await signToken();
+  await assert.rejects(async () => {
+    await resolver(HEADER, TOKEN_INPUT);
+  });
+  // Still inside the cooldown: no second attempt.
+  now = 2000;
+  await assert.rejects(async () => {
+    await resolver(HEADER, TOKEN_INPUT);
+  });
+  now = 40_000;
+  await assert.rejects(async () => {
+    await resolver(HEADER, TOKEN_INPUT);
+  });
+
+  assert.equal(counter.calls, 2);
+});
+
+test('a key set with no keys is refused', async () => {
+  const resolver = createCachingJwksResolver({
+    url: URL_UNDER_TEST,
+    fetchImpl: (async () =>
+      new Response(JSON.stringify({ keys: [] }), { status: 200 })) as unknown as typeof fetch,
+    now: () => 0,
+  });
+
+  const token = await signToken();
+  await assert.rejects(
+    async () => {
+      await resolver(HEADER, TOKEN_INPUT);
+    },
+    (error: unknown) => error instanceof SessionUnavailableError
+  );
+});

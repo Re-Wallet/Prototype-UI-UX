@@ -43,14 +43,24 @@ export interface RecentRecipient {
  * hook — so it is read at call time: the value changes when the user signs
  * in or out, and a captured value would go stale.
  */
+let warnedAboutMissingClient = false;
+
 function sessionToken(): string | null {
   try {
     const token = getDynamicClient().token;
     return typeof token === 'string' && token.length > 0 ? token : null;
-  } catch {
+  } catch (error) {
     // No Dynamic client yet: no environment id, or the SDK has not been
     // created. The request still goes out — a user-scoped route answers 401
-    // and a public route answers normally.
+    // and a public route answers normally — but a silent 401 loop is
+    // impossible to diagnose, so the failure is reported once.
+    if (!warnedAboutMissingClient) {
+      warnedAboutMissingClient = true;
+      console.warn(
+        '[api] the Dynamic client is not available; user-scoped requests will answer 401.',
+        error
+      );
+    }
     return null;
   }
 }

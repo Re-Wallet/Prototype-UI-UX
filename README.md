@@ -524,6 +524,13 @@ happen before the database is touched. The payer flow stays public on purpose
 (a payer may not be signed in) and relies on on-chain verification instead.
 See [Phase 0](#phase-0--the-gate-that-closes-first) for the reasoning.
 
+A **503** with `reason: "auth_unavailable"` means the key set could not be
+fetched — a broken dependency, not a bad credential. It is deliberately not a
+`401`: telling every user their session expired during a Dynamic hiccup would
+send the whole user base through a re-login. The key set is cached for ten
+minutes and keeps working for a day after a failed refresh, so a short outage
+does not reach the user at all.
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | POST | `/api/webhooks/dynamic` | HMAC | Dynamic webhook (HMAC-SHA256 verified, idempotent) |
@@ -709,6 +716,12 @@ payment link in their name. The threat model, ordered by damage:
 | `POST /api/payment-links/claim` (up to 7 paced RPC reads) | spam exhausts the shared RPC quota → real users' balance reads start failing with 429 | rate limited |
 | no CSP / HSTS / `X-Frame-Options` | clickjacking over a signature-requesting UI | security headers |
 | `GET /api/wallet/identity` | returns the account e-mail to any caller | returns the display name only |
+
+One honest caveat: the CSP allows `style-src 'unsafe-inline'`, because React
+writes inline styles for the phone frame and the charts. A nonce-based policy
+would close it, and it is a Fase 2 item rather than a Fase 0 one — the
+clickjacking defence (`frame-ancestors 'none'`) is the part that matters for
+a signing UI, and that one is strict.
 
 **How the session works.** The browser already has a session: Dynamic. The
 SDK exposes it as `client.token`, an RS256 JWT whose claims carry the user's
