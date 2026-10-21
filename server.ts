@@ -29,25 +29,32 @@ import path from 'node:path';
 
 import {
   countUnreadNotifications,
-  getPrimaryUser,
-  getPrimaryUser as getPrimaryUserProfile,
   getWalletSnapshot,
   getUserByPubkey,
   insertPendingTransfer,
   listNotifications,
   listRecentRecipients,
+  listNotificationsWithUnread,
   listTransactions,
   markNotificationsRead,
   setUserLanguage,
   upsertContactByPubkey,
 } from './src/services/wallet';
+import { assetBySymbol, chain, confirmTransferToRecipient, type Address } from './src/adapters';
 import { getBalances } from './src/services/balanceCache';
+import { cacheKey, getCached } from './src/services/readCache';
+import { getUserIdByPubkey } from './src/services/userCache';
+import { dbQueryCounter } from './src/services/dbMetrics';
+import { getSignatureFeePayer, verifySignatureOwnership } from './src/services/signatureOwnership';
+import { pacedRpc } from './src/services/rpcThrottle';
 import { getLandingMetrics } from './src/services/dynamicMetrics';
 import { syncAllWallets } from './src/services/historySync';
 import { noteCleanSweep, noteRateLimit } from './src/services/rpcThrottle';
-import { sealLiveTransactions } from './src/services/realtimeServer';
+import { sealLiveTransactions, sealLivePaymentLinks } from './src/services/realtimeServer';
 import {
+  claimPaymentLinkByReference,
   createPaymentLink,
+  getPaymentLinkRecipient,
   getPaymentLinkByReference,
   getPaymentLinkBySlug,
   listPaymentLinks,
@@ -61,10 +68,28 @@ import {
   recordWebhookDelivery,
   verifyDynamicSignature,
 } from './src/services/webhookIngestor';
-import { db, pool } from './src/db';
-import { landingSurveyResponses } from './src/db/schema';
+import { eq } from 'drizzle-orm';
+
+import { db, pool, warmPool } from './src/db';
+import { landingSurveyResponses, users as usersTable } from './src/db/schema';
 
 const app = express();
+/**
+ * Process-level guards.
+ *
+ * The API is the single point of contact for the wallet app: if one RPC read
+ * rejects — the public devnet endpoint answers bursts with 429 — an
+ * unhandled rejection would terminate the process and take every open screen
+ * down with it. A rejected promise is a failed request, not a fatal error.
+ */
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandled rejection:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('[process] uncaught exception:', error);
+});
+
 const PORT = Number(process.env.API_PORT ?? 3001);
 const HOST = process.env.API_HOST ?? '127.0.0.1';
 
@@ -97,6 +122,12 @@ app.use((req, res, next) => {
   next();
 });
 
+// Counts the database round-trips of each request and publishes the total in
+// the `X-DB-Queries` header. With a remote database every round-trip costs a
+// network RTT, so the query count is the metric that decides whether an
+// endpoint is fast.
+app.use(dbQueryCounter);
+
 // ============================================================================
 // DYNAMIC WEBHOOK (write path — confirmations arrive here)
 // ============================================================================
@@ -117,13 +148,33 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
 
   const secret = process.env.DYNAMIC_WEBHOOK_SECRET;
   const signature = req.header('x-dynamic-signature-256') ?? undefined;
+
+  // Fail CLOSED when no secret is configured.
+  //
+  // Without a secret the endpoint cannot authenticate the sender, and an
+  // unauthenticated webhook writes rows into the transaction ledger. That
+  // was only safe because the secret happened to be in the local env — a
+  // fresh deploy that forgot it would have accepted forged transfers.
+  //
+  // Local development without Dynamic can opt into unsigned mode
+  // explicitly with ALLOW_UNSIGNED_WEBHOOK=1.
+  const allowUnsigned = process.env.ALLOW_UNSIGNED_WEBHOOK === '1';
+  if (!secret?.trim() && !allowUnsigned) {
+    console.error(
+      '[webhook] DYNAMIC_WEBHOOK_SECRET is not set — rejecting. Set the secret, or opt into unsigned mode with ALLOW_UNSIGNED_WEBHOOK=1 for local development.'
+    );
+    return res.status(503).json({ error: 'webhook not configured' });
+  }
+
   const verdict = verifyDynamicSignature(rawBody, signature, secret);
   if (!verdict.ok) {
     console.warn(`[webhook] rejected: ${verdict.reason}`);
     return res.status(401).json({ error: verdict.reason });
   }
   if (verdict.skipped) {
-    console.warn('[webhook] signature check SKIPPED — DYNAMIC_WEBHOOK_SECRET is not set');
+    console.warn(
+      '[webhook] signature check SKIPPED — unsigned mode enabled explicitly (ALLOW_UNSIGNED_WEBHOOK=1)'
+    );
   }
 
   let parsed: ReturnType<typeof parseEnvelope>;
@@ -178,32 +229,31 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
 
 app.get('/api/health', async (_req, res) => {
   // Postgres probe — proves the Neon ledger is reachable.
-  let database: { status: string; error?: string };
+  //
+  // The failure detail stays server-side: a raw driver error names the host,
+  // the port and the branch, and a public health endpoint turns that into a
+  // map of the infrastructure. The status is enough for a probe.
+  let database: { status: string };
   try {
     await pool.query('SELECT 1');
     database = { status: 'ok' };
   } catch (error) {
-    database = {
-      status: 'error',
-      error: error instanceof Error ? error.message : String(error),
-    };
+    console.error('[health] database probe failed:', error);
+    database = { status: 'error' };
   }
 
   // Neon Functions probe — hits the deployed `hello` function.
   const fnUrl = process.env.NEON_FUNCTION_HELLO_BASE_URL;
-  let neonFunction: { status: string; url?: string; error?: string };
+  let neonFunction: { status: string };
   if (!fnUrl) {
     neonFunction = { status: 'not_configured' };
   } else {
     try {
       const fnRes = await fetch(fnUrl, { signal: AbortSignal.timeout(4000) });
-      neonFunction = { status: fnRes.ok ? 'ok' : `http_${fnRes.status}`, url: fnUrl };
+      neonFunction = { status: fnRes.ok ? 'ok' : `http_${fnRes.status}` };
     } catch (error) {
-      neonFunction = {
-        status: 'error',
-        url: fnUrl,
-        error: error instanceof Error ? error.message : String(error),
-      };
+      console.error('[health] neon function probe failed:', error);
+      neonFunction = { status: 'error' };
     }
   }
 
@@ -221,8 +271,19 @@ app.get('/api/health', async (_req, res) => {
 // WALLET
 // ============================================================================
 
-app.get('/api/wallet', async (_req, res) => {
-  const snapshot = await getWalletSnapshot();
+app.get('/api/wallet', async (req, res) => {
+  // Scoped by the wallet, like every other wallet endpoint. Without the
+  // parameter this used to return the PRIMARY user's full profile — email,
+  // phone, balance, history and contacts — to anyone who asked.
+  const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
+  if (!BASE58_RE.test(wallet)) {
+    return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
+  }
+  const userId = await getUserIdByPubkey(wallet);
+  if (userId === null) {
+    return res.status(404).json({ error: 'No wallet data is available.' });
+  }
+  const snapshot = await getWalletSnapshot(userId);
   if (!snapshot) {
     return res.status(404).json({ error: 'No wallet data is available.' });
   }
@@ -233,9 +294,11 @@ app.get('/api/wallet/transactions', async (req, res) => {
   // Scoped by the caller's wallet so a multi-user DB never mixes histories.
   // Falls back to the primary user for older callers that omit the param.
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
-  const user = wallet ? await getUserByPubkey(wallet) : await getPrimaryUser();
-  if (!user) return res.status(404).json({ error: 'No wallet data is available.' });
-  res.json(await listTransactions(user.id));
+  const userId = wallet ? await getUserIdByPubkey(wallet) : null;
+  if (userId === null) return res.status(404).json({ error: 'No wallet data is available.' });
+  // Cached: the history only changes when a movement lands, and every write
+  // path invalidates this key.
+  res.json(await getCached(cacheKey.transactions(userId), () => listTransactions(userId)));
 });
 
 /**
@@ -289,6 +352,21 @@ app.post('/api/wallet/transactions/pending', async (req, res) => {
   const user = await getUserByPubkey(wallet.trim());
   if (!user) return res.status(404).json({ error: 'The sending wallet is not registered.' });
 
+  // Prove the signature belongs to this wallet before writing to its ledger.
+  //
+  // Without this, anyone who can reach the endpoint can post a row into any
+  // wallet's history — a fabricated "sent 999999 USDC" entry in someone
+  // else's balance screen.
+  const ownership = await verifySignatureOwnership(signature.trim(), wallet.trim());
+  if (ownership === 'not-owned') {
+    return res.status(403).json({ error: 'signature does not belong to this wallet' });
+  }
+  if (ownership === 'unknown') {
+    // The transaction is not visible yet. The row is optional: the webhook
+    // projects the real movement when it lands.
+    return res.status(409).json({ error: 'transaction not visible yet' });
+  }
+
   const row = await insertPendingTransfer(user.id, {
     signature: signature.trim(),
     counterpartyPubkey: counterpartyPubkey.trim(),
@@ -306,15 +384,18 @@ app.post('/api/wallet/transactions/pending', async (req, res) => {
  */
 app.get('/api/wallet/notifications', async (req, res) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
-  const user = wallet ? await getUserByPubkey(wallet) : await getPrimaryUser();
-  if (!user) {
+  const userId = wallet ? await getUserIdByPubkey(wallet) : null;
+  if (userId === null) {
     // Unregistered wallet: an empty feed is not an error.
     return res.json({ unread: 0, items: [] });
   }
-  res.json({
-    unread: await countUnreadNotifications(user.id),
-    items: await listNotifications(user.id),
-  });
+  // The feed and the unread badge come from one query (the count rides on a
+  // window function), and the whole read is cached until a write lands.
+  const { items, unread } = await getCached(
+    cacheKey.notifications(userId),
+    () => listNotificationsWithUnread(userId)
+  );
+  res.json({ unread, items });
 });
 
 /**
@@ -348,10 +429,15 @@ app.get('/api/wallet/contacts', async (req, res) => {
   if (!BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
   }
-  const user = await getUserByPubkey(wallet);
+  const userId = await getUserIdByPubkey(wallet);
   // Unregistered wallet: empty address book (not an error).
-  if (!user) return res.json([]);
-  res.json(await listRecentRecipients(user.id));
+  if (userId === null) return res.json([]);
+  // Read-through cache: the Transfer screen remounts on every tab switch and
+  // the address book rarely changes between reads. The wallet → id resolution
+  // is cached too, so a warm request touches the database zero times.
+  res.json(
+    await getCached(cacheKey.contacts(userId), () => listRecentRecipients(userId))
+  );
 });
 
 app.get('/api/wallet/balances', async (req, res) => {
@@ -414,6 +500,7 @@ app.post('/api/payment-links', async (req, res) => {
       paidAt: link.paidAt,
       paidByPubkey: link.paidByPubkey,
       paidTxId: link.paidTxId,
+      paidTxSignature: link.paidTxSignature,
       expiresAt: link.expiresAt,
       createdAt: link.createdAt,
     });
@@ -444,6 +531,7 @@ app.get('/api/payment-links/by-reference/:reference', async (req, res) => {
     paidAt: link.paidAt,
     paidByPubkey: link.paidByPubkey,
     paidTxId: link.paidTxId,
+      paidTxSignature: link.paidTxSignature,
     expiresAt: link.expiresAt,
     createdAt: link.createdAt,
   });
@@ -469,6 +557,7 @@ app.get('/api/payment-links/by-slug/:slug', async (req, res) => {
     paidAt: link.paidAt,
     paidByPubkey: link.paidByPubkey,
     paidTxId: link.paidTxId,
+      paidTxSignature: link.paidTxSignature,
     expiresAt: link.expiresAt,
     createdAt: link.createdAt,
   });
@@ -482,9 +571,37 @@ app.get('/api/payment-links', async (req, res) => {
   if (!BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
   }
-  const user = await getUserByPubkey(wallet);
-  if (!user) return res.json([]);
-  res.json(await listPaymentLinks(user.id));
+  const userId = await getUserIdByPubkey(wallet);
+  if (userId === null) return res.json([]);
+  // Cached until a link is created or settled.
+  res.json(
+    await getCached(cacheKey.paymentLinks(userId), () => listPaymentLinks(userId))
+  );
+});
+
+/**
+ * Mint a sealed Neon Realtime capability for this user's payment links.
+ *
+ * When the webhook settles a link, the `payment_links` row flips to `paid`
+ * and the browser learns about it through the Realtime WebSocket — the
+ * collector's screen updates to "Pago recibido" without polling. The DB
+ * query never leaves the server; only its encrypted, expiring capability does.
+ */
+app.post('/api/payment-links/live', async (req, res) => {
+  const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
+  if (!wallet || !BASE58_RE.test(wallet)) {
+    return res.status(400).json({ error: 'wallet body field must be a base58 Solana address.' });
+  }
+  try {
+    const user = await getUserByPubkey(wallet);
+    if (!user) return res.status(404).json({ error: 'No wallet data is available.' });
+    res.json(await sealLivePaymentLinks(user.id));
+  } catch (error) {
+    // Fail soft: without a capability the UI keeps its REST + polling paths.
+    res.status(503).json({
+      error: error instanceof Error ? error.message : 'Realtime is not configured.',
+    });
+  }
 });
 
 /**
@@ -497,8 +614,21 @@ app.get('/api/wallet/identity', async (req, res) => {
   if (!BASE58_RE.test(address)) {
     return res.status(400).json({ error: 'address query param must be a base58 Solana address.' });
   }
-  const user = await getUserByPubkey(address);
-  res.json({ email: user?.email ?? null, handle: user?.handle ?? null });
+  // The display identity of a wallet changes only when the user edits their
+  // profile, so it is cached. Only the two display fields are read.
+  const identity = await getCached(
+    cacheKey.identity(address),
+    async () => {
+      const [row] = await db
+        .select({ email: usersTable.email, handle: usersTable.handle })
+        .from(usersTable)
+        .where(eq(usersTable.publicKey, address))
+        .limit(1);
+      return { email: row?.email ?? null, handle: row?.handle ?? null };
+    },
+    { ttlMs: 300_000 }
+  );
+  res.json(identity);
 });
 
 app.post('/api/wallet/contacts', async (req, res) => {
@@ -527,15 +657,21 @@ app.post('/api/wallet/contacts', async (req, res) => {
 // ============================================================================
 
 app.patch('/api/settings/language', async (req, res) => {
-  const user = await getPrimaryUser();
-  if (!user) return res.status(404).json({ error: 'No wallet data is available.' });
+  // Scoped by the wallet: without it, any caller could rewrite the language
+  // of whichever user happens to be first in the table.
+  const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
+  if (!BASE58_RE.test(wallet)) {
+    return res.status(400).json({ error: 'wallet body field must be a base58 Solana address.' });
+  }
+  const userId = await getUserIdByPubkey(wallet);
+  if (userId === null) return res.status(404).json({ error: 'No wallet data is available.' });
 
   const { language } = req.body ?? {};
   if (language !== 'en' && language !== 'es') {
     return res.status(400).json({ error: 'language must be "en" or "es"' });
   }
 
-  await setUserLanguage(user.id, language);
+  await setUserLanguage(userId, language);
   res.json({ language });
 });
 
@@ -549,6 +685,118 @@ app.patch('/api/settings/language', async (req, res) => {
  * snapshot so the token stays server-side and the static landing only ever
  * calls our API. Fail-soft: always 200 with the best snapshot available.
  */
+/**
+ * Settle the link a payer declared.
+ *
+ * The payment reference does not travel on-chain, so the webhook can only
+ * guess which link a transfer pays — by recipient and amount. It guesses
+ * wrong whenever the same recipient has two active links of the same amount:
+ * it settles the older one and leaves the shared one payable.
+ *
+ * The payer, on the other hand, knows exactly which link it opened: the
+ * reference is in the URL it was given. This endpoint takes that reference
+ * and verifies ON-CHAIN that the transaction really moved the link's amount
+ * to its recipient, before settling that specific link.
+ */
+app.post('/api/payment-links/claim', async (req, res) => {
+  const { reference, signature } = req.body ?? {};
+  if (typeof reference !== 'string' || !reference.trim()) {
+    return res.status(400).json({ error: 'reference is required.' });
+  }
+  if (typeof signature !== 'string' || signature.trim().length < 32) {
+    return res.status(400).json({ error: 'signature must be the base58 transaction signature.' });
+  }
+
+  const link = await getPaymentLinkByReference(reference.trim());
+  if (!link) return res.status(404).json({ error: 'Enlace no encontrado.' });
+  if (link.status !== 'active') {
+    return res.status(409).json({ error: 'El enlace ya no está disponible.' });
+  }
+  if (link.amountUsdc === null) {
+    return res.status(409).json({ error: 'El enlace no tiene un monto fijo.' });
+  }
+  // Captured as a local so the narrowing survives into the closure below.
+  const amountUsdc = link.amountUsdc;
+
+  const recipient = await getPaymentLinkRecipient(reference.trim());
+  if (!recipient) return res.status(404).json({ error: 'El enlace no tiene destinatario.' });
+
+  const asset = assetBySymbol('USDC', chain.network().cluster);
+  if (!asset) return res.status(503).json({ error: 'USDC no está configurado.' });
+
+  // The transaction may not be visible the instant it was signed, and the
+  // public RPC may answer 429. Both are transient, so the check is retried
+  // with a growing delay — a rate-limited read is NOT the same as a
+  // transaction that does not exist, and treating it as one would abandon
+  // a perfectly good payment.
+  let verdict: 'confirmed' | 'not-found' | 'mismatch' = 'not-found';
+  let transientFailures = 0;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      // The verification is an RPC read, so it goes through the shared pacing
+      // gate: the public devnet endpoint answers bursts with 429, and every
+      // RPC read in the process has to share one measured budget.
+      verdict = await pacedRpc(() =>
+        confirmTransferToRecipient(
+          signature.trim(),
+          recipient as Address,
+          asset,
+          amountUsdc
+        )
+      );
+      transientFailures = 0;
+    } catch {
+      transientFailures += 1;
+    }
+    if (verdict !== 'not-found') break;
+    await new Promise((resolve) => setTimeout(resolve, 500 + attempt * 500));
+  }
+
+  if (verdict === 'not-found' && transientFailures > 0) {
+    // The RPC was failing, not the transaction. Say so instead of claiming
+    // the payment does not exist.
+    return res.status(503).json({ error: 'El RPC de Solana no responde, reintenta.' });
+  }
+
+  if (verdict !== 'confirmed') {
+    return res.status(verdict === 'not-found' ? 409 : 422).json({
+      error:
+        verdict === 'not-found'
+          ? 'La transaccion todavia no es visible.'
+          : 'La transaccion no coincide con el cobro.',
+    });
+  }
+
+  const payer = (await getSignatureFeePayer(signature.trim())) ?? null;
+  const settled = await claimPaymentLinkByReference(link.referencePubkey, {
+    paidAmountUsdc: amountUsdc,
+    paidByPubkey: payer ?? 'unknown',
+    paidTxId: null,
+    paidTxSignature: signature.trim(),
+  });
+
+  res.json({ ok: settled?.status === 'paid', link: settled });
+});
+
+/**
+ * The tunnel's current public URL.
+ *
+ * The quick tunnel's hostname changes every time it is restarted. The
+ * supervisor writes it to a file; this endpoint publishes it so the browser
+ * can build payment links that a payer on another device can open, without
+ * the frontend having to be rebuilt with a new URL baked in.
+ */
+app.get('/api/tunnel', async (_req, res) => {
+  const file = process.env.TUNNEL_URL_FILE ?? '/tmp/opencode/tunnel.url';
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const url = (await readFile(file, 'utf8')).trim();
+    res.json({ url: url || null });
+  } catch {
+    res.json({ url: null });
+  }
+});
+
 app.get('/api/landing/metrics', async (_req, res) => {
   try {
     res.json(await getLandingMetrics());
@@ -641,6 +889,10 @@ app.listen(PORT, HOST, () => {
   console.log(`   GET  /api/landing/metrics\n`);
 
   startHistorySweeper();
+
+  // Warm the database pool in the background: the first user request should
+  // not pay for the TCP + TLS handshake to Neon.
+  void warmPool();
 });
 
 /**

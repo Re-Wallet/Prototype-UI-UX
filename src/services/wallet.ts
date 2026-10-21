@@ -4,7 +4,7 @@
  * Maps persisted SQLite wallet records to the API domain types.
  */
 
-import { and, desc, eq, getTableColumns, inArray, isNotNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNotNull, ne, sql, type SQL } from 'drizzle-orm';
 
 import { db } from '../db';
 import {
@@ -13,12 +13,18 @@ import {
   transactions as transactionsTable,
   users as usersTable,
 } from '../db/schema';
-import type { User as DbUser, Contact as DbContact } from '../db/schema';
+import type {
+  User as DbUser,
+  Contact as DbContact,
+  Notification as DbNotification,
+  Transaction as DbTransaction,
+} from '../db/schema';
 
 import type { Contact as UiContact, Transaction as UiTransaction } from '../types/wallet';
 
-import { mapTransaction } from './transactionMapper';
+import { mapTransaction, mapLiveTransactionRow, type LiveTransactionRow } from './transactionMapper';
 import { invalidateBalances } from './balanceCache';
+import { cacheKey, invalidate } from './readCache';
 
 // ============================================================================
 // DOMAIN MAPPERS
@@ -126,38 +132,29 @@ export async function listTransactions(
   userId: number,
   limit = 50
 ): Promise<UiTransaction[]> {
+  // The peer's registered email is LEFT JOINed instead of resolved in a
+  // second query: a counterparty outside ReWallet simply has no row, and the
+  // UI falls back to the address. This is the same selection the Realtime
+  // live query uses, so both paths share one mapper.
+  //
+  // The extra round-trip this removes cost a full network RTT, which is the
+  // dominant term in this endpoint's latency.
   const rows = await db
-    .select()
+    .select({
+      ...selectAllTransactions(),
+      counterpartyEmail: sql`${usersTable.email}`.as('counterpartyEmail'),
+    })
     .from(transactionsTable)
+    .leftJoin(usersTable, eq(usersTable.publicKey, transactionsTable.counterpartyPubkey))
     .where(eq(transactionsTable.userId, userId))
     .orderBy(desc(transactionsTable.createdAt))
     .limit(limit);
 
-  // Resolve the peer's registered email so receipts can name people instead
-  // of base58 strings. Left-joined: a counterparty outside ReWallet simply
-  // has no row, and the UI falls back to the address.
-  const pubkeys = [
-    ...new Set(
-      rows
-        .map((row) => row.counterpartyPubkey)
-        .filter((key): key is string => typeof key === 'string' && key.length > 0)
-    ),
-  ];
-  const peers =
-    pubkeys.length > 0
-      ? await db
-          .select({ publicKey: usersTable.publicKey, email: usersTable.email })
-          .from(usersTable)
-          .where(inArray(usersTable.publicKey, pubkeys))
-      : [];
-  const emailByPubkey = new Map(peers.map((peer) => [peer.publicKey, peer.email]));
-
-  return rows.map((row) => ({
-    ...mapTransaction(row),
-    counterpartyEmail: row.counterpartyPubkey
-      ? emailByPubkey.get(row.counterpartyPubkey) ?? null
-      : null,
-  }));
+  // The aliased columns are typed as `unknown` by Drizzle, but the selection
+  // provably returns `LiveTransactionRow`-shaped rows: camelCase result
+  // names, and the default parsers revive `timestamptz` and `jsonb`. This is
+  // the same assertion the Realtime path makes.
+  return rows.map((row) => mapLiveTransactionRow(row as unknown as LiveTransactionRow));
 }
 
 /**
@@ -176,7 +173,23 @@ function aliasAllTransactions() {
       key,
       sql`${column}`.as(key),
     ])
-  );
+  ) as unknown as Record<keyof DbTransaction, SQL>;
+}
+
+/**
+ * Selection for the REST path: the real column objects, so Drizzle knows
+ * each column's data type.
+ *
+ * This matters more than it looks. Drizzle's node-postgres driver disables
+ * node-postgres' own TIMESTAMPTZ parser and converts timestamps itself, using
+ * the type metadata of the SELECT. An aliased `sql` fragment has an `unknown`
+ * type, so the conversion is skipped and the raw string reaches the mapper —
+ * `date.getTime()` then throws. Real columns keep the conversion; the aliased
+ * variant above is only for the Realtime path, where the proxy already sends
+ * parsed values.
+ */
+function selectAllTransactions() {
+  return getTableColumns(transactionsTable);
 }
 
 /**
@@ -294,6 +307,11 @@ export async function upsertTransactions(
         target: [transactionsTable.userId, transactionsTable.referenceId],
         set: {
           status: values.status,
+          // The chain projection is authoritative for the movement's NATURE.
+          // A row inserted optimistically by the client (or injected by
+          // anyone who can reach the endpoint) could claim `sent` for what
+          // the chain shows as an incoming deposit; the webhook corrects it.
+          type: values.type,
           amountUsdc: values.amountUsdc,
           amountSol: values.amountSol,
           fiatAmount: values.fiatAmount,
@@ -321,6 +339,13 @@ export async function upsertTransactions(
   // stale. Drop it so the next read goes to the chain. This is the one place
   // that covers both the webhook and the sweeper — no caller can forget it.
   if (walletPubkey) invalidateBalances(walletPubkey);
+
+  // The same movement can reorder the address book (it is one of the sources
+  // `listRecentRecipients` merges). Drop that cache too, from the same single
+  // place, so no write path can forget it.
+  invalidate(cacheKey.contacts(userId));
+  invalidate(cacheKey.transactions(userId));
+  invalidate(cacheKey.notifications(userId));
 
   return {
     inserted: movements.length - alreadyStored.size,
@@ -391,7 +416,13 @@ export async function insertPendingTransfer(
       createdAt: now,
       updatedAt: now,
     })
-    .onConflictDoNothing();
+      .onConflictDoNothing();
+
+  // A new outgoing movement changes the address book (it is one of the
+  // sources `listRecentRecipients` merges), so the cached book is stale.
+  invalidate(cacheKey.contacts(userId));
+  invalidate(cacheKey.transactions(userId));
+  invalidate(cacheKey.notifications(userId));
 
   const [row] = await db
     .select()
@@ -463,6 +494,13 @@ export async function listRecentRecipients(
 ): Promise<RecentRecipient[]> {
   const outgoingAt = sql<number | null>`COALESCE(${transactionsTable.confirmedAt}, ${transactionsTable.createdAt})`;
 
+  // The peer's display fields are LEFT JOINed into both sources instead of
+  // being resolved in a third query. The two source queries still run in
+  // parallel, so the whole read costs two round-trips instead of three.
+  const peerEmail = sql<string | null>`${usersTable.email}`;
+  const peerHandle = sql<string | null>`${usersTable.handle}`;
+  const peerName = sql<string | null>`${usersTable.name}`;
+
   const [contactRows, transferRows] = await Promise.all([
     db
       .select({
@@ -471,8 +509,11 @@ export async function listRecentRecipients(
         name: contactsTable.name,
         publicKey: contactsTable.publicKey,
         updatedAt: contactsTable.updatedAt,
+        peerEmail,
+        peerHandle,
       })
       .from(contactsTable)
+      .leftJoin(usersTable, eq(usersTable.publicKey, contactsTable.publicKey))
       .where(eq(contactsTable.userId, userId))
       .orderBy(desc(contactsTable.updatedAt))
       .limit(limit),
@@ -481,8 +522,12 @@ export async function listRecentRecipients(
         id: transactionsTable.id,
         publicKey: transactionsTable.counterpartyPubkey,
         at: outgoingAt,
+        peerEmail,
+        peerHandle,
+        peerName,
       })
       .from(transactionsTable)
+      .leftJoin(usersTable, eq(usersTable.publicKey, transactionsTable.counterpartyPubkey))
       .where(
         and(
           eq(transactionsTable.userId, userId),
@@ -500,27 +545,15 @@ export async function listRecentRecipients(
   for (const row of transferRows) if (row.publicKey) addresses.add(row.publicKey);
   if (addresses.size === 0) return [];
 
-  const peers = await db
-    .select({
-      publicKey: usersTable.publicKey,
-      handle: usersTable.handle,
-      name: usersTable.name,
-      email: usersTable.email,
-    })
-    .from(usersTable)
-    .where(inArray(usersTable.publicKey, [...addresses]));
-  const peerByAddress = new Map(peers.map((peer) => [peer.publicKey, peer]));
-
   const merged = new Map<string, RecentRecipient>();
 
   // Explicit contacts first: they carry the name the user picked.
   for (const row of contactRows) {
     if (!row.publicKey) continue;
-    const peer = peerByAddress.get(row.publicKey);
     merged.set(row.publicKey, {
       id: `c-${row.id}`,
-      email: peer?.email ?? null,
-      name: peer?.email ?? (row.name || truncateAddress(row.publicKey)),
+      email: row.peerEmail ?? null,
+      name: row.peerEmail ?? (row.name || truncateAddress(row.publicKey)),
       handle: row.handle,
       address: row.publicKey,
       lastSentAt: row.updatedAt?.getTime() ?? null,
@@ -539,12 +572,11 @@ export async function listRecentRecipients(
       continue;
     }
 
-    const peer = peerByAddress.get(row.publicKey);
     merged.set(row.publicKey, {
       id: `t-${row.id}`,
-      email: peer?.email ?? null,
-      name: peer?.email ?? peer?.name ?? truncateAddress(row.publicKey),
-      handle: peer?.handle ?? row.publicKey,
+      email: row.peerEmail ?? null,
+      name: row.peerEmail ?? row.peerName ?? truncateAddress(row.publicKey),
+      handle: row.peerHandle ?? row.publicKey,
       address: row.publicKey,
       lastSentAt: at,
     });
@@ -611,6 +643,12 @@ export async function upsertContactByPubkey(
     .where(and(eq(contactsTable.userId, userId), eq(contactsTable.publicKey, address)))
     .limit(1);
 
+  // The address book changed: drop the cached copy so the next read (the
+  // Transfer screen refreshes right after a send) is fresh.
+  invalidate(cacheKey.contacts(userId));
+  invalidate(cacheKey.transactions(userId));
+  invalidate(cacheKey.notifications(userId));
+
   if (!saved) return null;
   return {
     id: `c-${saved.id}`,
@@ -629,18 +667,31 @@ export interface WalletSnapshot {
   contacts: UiContact[];
 }
 
-export async function getWalletSnapshot(): Promise<WalletSnapshot | null> {
-  const user = await getPrimaryUser();
+/**
+ * Snapshot of one user's wallet.
+ *
+ * Scoped by `userId` on purpose: an unscoped "primary user" snapshot is a
+ * profile dump — name, handle, email, phone, balance, history and contacts —
+ * for whoever happens to be first in the table, with no way to ask for anyone
+ * else. The caller resolves the wallet to a user first.
+ */
+export async function getWalletSnapshot(userId: number): Promise<WalletSnapshot | null> {
+  const [user] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
   if (!user) return null;
+  const profile = mapUser(user);
 
   const [transactions, contacts] = await Promise.all([
-    listTransactions(user.id),
-    listContacts(user.id),
+    listTransactions(userId),
+    listContacts(userId),
   ]);
 
   return {
-    user,
-    balance: user.balanceUsdc,
+    user: profile,
+    balance: profile.balanceUsdc,
     transactions,
     contacts,
   };
@@ -655,9 +706,54 @@ export async function listNotifications(userId: number, limit = 20) {
     .limit(limit);
 }
 
+/**
+ * Drizzle selection for the notification feed: every `notifications` column
+ * aliased under its Drizzle JS key, so the row shape matches `Notification`
+ * exactly and the aliased rows can carry an extra computed column.
+ */
+function selectAllNotifications() {
+  return getTableColumns(notificationsTable);
+}
+
+/**
+ * The notification feed and the unread badge in one round-trip.
+ *
+ * The unread count used to be a separate `COUNT(*)` query. A window function
+ * computes it over the same result set instead: `FILTER (...) OVER ()` is
+ * evaluated before `LIMIT`, so the badge counts every unread notification
+ * while the feed still returns only the newest `limit` rows.
+ *
+ * The count rides on the first row; an empty feed means zero unread.
+ */
+export async function listNotificationsWithUnread(
+  userId: number,
+  limit = 20
+): Promise<{ items: DbNotification[]; unread: number }> {
+  const rows = await db
+    .select({
+      ...selectAllNotifications(),
+      unreadTotal: sql<number>`COUNT(*) FILTER (WHERE ${notificationsTable.isRead} = false) OVER ()::int`.as(
+        'unreadTotal'
+      ),
+    })
+    .from(notificationsTable)
+    .where(eq(notificationsTable.userId, userId))
+    .orderBy(desc(notificationsTable.createdAt))
+    .limit(limit);
+
+  const unread = rows.length > 0 ? Number(rows[0].unreadTotal ?? 0) : 0;
+  // The helper column is an artifact of the query, not part of the feed.
+  const items = rows.map(({ unreadTotal: _unreadTotal, ...row }) => row as DbNotification);
+  return { items, unread };
+}
+
 export async function countUnreadNotifications(userId: number): Promise<number> {
+  // `COUNT(*)` returns bigint, which node-postgres hands over as a STRING to
+  // preserve precision — so the raw value would be `"8"`, not `8`, while the
+  // signature promises a number. Casting to integer in SQL keeps the value
+  // numeric end to end. The same applies to the window-function count below.
   const [row] = await db
-    .select({ count: sql<number>`COUNT(*)` })
+    .select({ count: sql<number>`COUNT(*)::int` })
     .from(notificationsTable)
     .where(
       and(
@@ -728,6 +824,9 @@ export async function markNotificationsRead(
     .update(notificationsTable)
     .set({ isRead: true, readAt: new Date() })
     .where(scope);
+
+  // The cached feed still shows the old read flags and badge count.
+  invalidate(cacheKey.notifications(userId));
 
   return countUnreadNotifications(userId);
 }

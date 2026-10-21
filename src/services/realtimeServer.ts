@@ -19,6 +19,8 @@ import { drizzleAdapter } from '@neon/realtime-drizzle';
 
 import { liveTransactionsQuery } from './wallet';
 import type { LiveTransactionRow } from './transactionMapper';
+import { livePaymentLinksQuery } from './paymentLinks';
+import type { PaymentLink } from './paymentLinks';
 
 const realtime = process.env.NEON_REALTIME_SECRET
   ? createRealtime({
@@ -50,5 +52,27 @@ export function sealLiveTransactions(
   }
   return realtime.seal({ query: liveTransactionsQuery(userId) }) as Promise<
     SealedLiveQuery<LiveTransactionRow>
+  >;
+}
+
+/**
+ * Seal the user's payment-link live query for the browser.
+ *
+ * Same contract as {@link sealLiveTransactions}: the aliased selection
+ * provably returns `PaymentLink`-shaped rows, so the browser mapper runs
+ * without a translation layer.
+ */
+export function sealLivePaymentLinks(
+  userId: number
+): Promise<SealedLiveQuery<PaymentLink>> {
+  if (!realtime) {
+    return Promise.reject(
+      new Error(
+        'NEON_REALTIME_SECRET is not set. Run `neon env pull --service realtime` in the project root.'
+      )
+    );
+  }
+  return realtime.seal({ query: livePaymentLinksQuery(userId) }) as Promise<
+    SealedLiveQuery<PaymentLink>
   >;
 }

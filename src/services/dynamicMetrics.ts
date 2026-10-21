@@ -23,6 +23,7 @@ import { eq } from 'drizzle-orm';
 
 import { db } from '../db';
 import { dynamicMetrics } from '../db/schema';
+import { getCached } from './readCache';
 
 const DASHBOARD_API = 'https://app.dynamic.xyz/api/v0';
 const DEFAULT_TTL_MS = 5 * 60_000;
@@ -126,6 +127,17 @@ async function fetchTopline(environmentId: string, token: string): Promise<Landi
  * landing animates whatever it gets instead of breaking.
  */
 export async function getLandingMetrics(): Promise<LandingMetrics> {
+  // The landing is a static public page: every visitor hits this endpoint.
+  // The row in `dynamic_metrics` already carries a TTL, but reading it is
+  // still one database round-trip per visitor. The in-process cache turns
+  // the warm path into zero round-trips.
+  return getCached('landing-metrics', readSnapshot, { ttlMs: DEFAULT_TTL_MS });
+}
+
+/**
+ * Read the stored snapshot and refresh it from Dynamic when it is stale.
+ */
+async function readSnapshot(): Promise<LandingMetrics> {
   const cached = toLandingMetrics(await readCachedRow());
 
   const token = process.env.DYNAMIC_API_TOKEN?.trim();
