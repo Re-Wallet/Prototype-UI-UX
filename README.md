@@ -948,6 +948,13 @@ Deliberate prototype constraints — tracked, not accidental:
   transfer of the same token twice in one transaction keeps only the last
   one. The webhook and the sweeper build that key together, so changing it
   means changing both.
+- **A notification can be duplicated by a concurrent redelivery.** The
+  notification is deduplicated by its movement signature with a
+  check-then-insert, so two projections of the same delivery landing at the
+  same instant can write it twice — a second banner, nothing else. The
+  movement itself is safe (the ledger upsert is keyed on the movement). A
+  unique index on the notification's signature closes it; that is a schema
+  change, so it belongs with the Fase 1 migrations.
 - **i18n is partial.** Onboarding, home chrome, and settings are ES/EN;
   several flows hardcode Spanish.
 

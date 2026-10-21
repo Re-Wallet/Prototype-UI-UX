@@ -44,7 +44,7 @@ import type { TransferVerdict } from './src/adapters/payment-verify';
 import { getBalances } from './src/services/balanceCache';
 import { cacheKey, getCached } from './src/services/readCache';
 import { getUserIdByPubkey } from './src/services/userCache';
-import { provisionUser } from './src/services/userProvisioning';
+import { provisionUser, ProvisioningError } from './src/services/userProvisioning';
 import { dbQueryCounter } from './src/services/dbMetrics';
 import { getSignatureFeePayer, verifySignatureOwnership } from './src/services/signatureOwnership';
 import { pacedRpc } from './src/services/rpcThrottle';
@@ -65,6 +65,7 @@ import {
 import {
   markWebhookPending,
   markWebhookProcessed,
+  pruneWebhookDeliveries,
   parseEnvelope,
   parseWalletActivity,
   projectWalletActivity,
@@ -315,17 +316,14 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
         return;
       }
       const result = await projectWalletActivity(envelope, activity);
-      if (result.projected > 0) {
+      if (result.wrote) {
         await markWebhookProcessed(delivery.id);
       } else {
         // Nothing was written: the wallet is not registered yet, or no link
         // matched. The delivery is NOT consumed, so a redelivery — or the
         // sweeper — can project it once the row exists. Consuming it here
         // dropped the movement for good.
-        await markWebhookPending(
-          delivery.id,
-          result.ignored ?? 'the projection wrote no movement'
-        );
+        await markWebhookPending(delivery.id, result.ignored);
       }
       console.log(
         `[webhook] projected ${result.projected} movement(s) for ${transactionHash}` +
@@ -817,14 +815,28 @@ app.post(
     const text = (value: unknown): string | null =>
       typeof value === 'string' && value.trim() ? value.trim() : null;
 
-    const provisioned = await provisionUser(wallet, {
-      handle: text(body.handle),
-      name: text(body.name),
-      email: text(body.email),
-      phone: text(body.phone),
-      country: text(body.country),
-      language: text(body.language),
-    });
+    let provisioned;
+    try {
+      provisioned = await provisionUser(wallet, {
+        handle: text(body.handle),
+        name: text(body.name),
+        email: text(body.email),
+        phone: text(body.phone),
+        country: text(body.country),
+        language: text(body.language),
+      });
+    } catch (error) {
+      if (error instanceof ProvisioningError) {
+        // The row could not be created for a reason this server cannot fix.
+        // It is a temporary condition, so it answers 503 and the client
+        // retries. A 500 would read as a bug and send the user nowhere.
+        console.error('[users] the ledger row could not be created', error);
+        return res
+          .status(503)
+          .json({ error: 'No pudimos crear tu perfil todavia. Reintenta en un momento.' });
+      }
+      throw error;
+    }
 
     res.json({
       id: provisioned.id,
@@ -1209,6 +1221,15 @@ function startHistorySweeper(): void {
 
     void (async () => {
       try {
+        // The delivery log is the webhook's idempotency ledger. The sweeper
+        // has already reconciled the chain, so the entries older than a month
+        // are history — and without this the table grows with every delivery
+        // Dynamic ever sends.
+        const pruned = await pruneWebhookDeliveries(30);
+        if (pruned > 0) {
+          console.log(`[sweeper] pruned ${pruned} old webhook deliveries`);
+        }
+
         const { results, rateLimited } = await syncAllWallets(500);
 
         if (rateLimited) {

@@ -55,6 +55,14 @@ export interface ProvisionedUser {
 const MAX_HANDLE_LENGTH = 32;
 
 /**
+ * How many times the insert is retried when a unique constraint collides.
+ *
+ * Each attempt removes exactly one conflict, so the bound is generous
+ * enough for the e-mail and the handle to collide in the same call.
+ */
+const MAX_INSERT_ATTEMPTS = 4;
+
+/**
  * Reduce a free-text profile field to a handle.
  *
  * Handles end up in URLs and in the address book, so they are normalised the
@@ -97,18 +105,34 @@ export function deriveDesiredHandle(publicKey: string, profile: SessionProfile):
  * the suffix makes the second one distinct without either of them having to
  * try again. The row is unique on the address, so the owner of a handle
  * always keeps it.
+ *
+ * `skip` carries the widths already used, so a retry after a lost race does
+ * not hand back the same handle that just lost.
  */
-async function uniqueHandle(desired: string, publicKey: string): Promise<string> {
+interface HandleResolution {
+  handle: string;
+  /** The suffix width that was used: 0 none, 4/8/12, or -1 for the address. */
+  width: number;
+}
+
+async function resolveHandle(
+  desired: string,
+  publicKey: string,
+  skip: number[] = []
+): Promise<HandleResolution> {
   const taken = await db
     .select({ publicKey: usersTable.publicKey })
     .from(usersTable)
     .where(eq(usersTable.handle, desired))
     .limit(1);
-  if (taken.length === 0 || taken[0].publicKey === publicKey) return desired;
+  if (taken.length === 0 || taken[0].publicKey === publicKey) {
+    return { handle: desired, width: 0 };
+  }
 
   // Widen the suffix until it is free. Four characters of a base58 address
-  // is 36 bits, so a clash here means the same person or a collision.
+  // is about 23 bits, so a clash here means the same person or a collision.
   for (let width = 4; width <= 12; width += 4) {
+    if (skip.includes(width)) continue;
     const candidate = `${desired.slice(0, MAX_HANDLE_LENGTH - width - 1)}-${publicKey
       .slice(0, width)
       .toLowerCase()}`;
@@ -117,11 +141,21 @@ async function uniqueHandle(desired: string, publicKey: string): Promise<string>
       .from(usersTable)
       .where(eq(usersTable.handle, candidate))
       .limit(1);
-    if (clash.length === 0 || clash[0].publicKey === publicKey) return candidate;
+    if (clash.length === 0 || clash[0].publicKey === publicKey) {
+      return { handle: candidate, width };
+    }
   }
 
   // The address itself is unique, so it is the last resort that always works.
-  return `user-${publicKey.toLowerCase()}`;
+  return { handle: `user-${publicKey.toLowerCase()}`, width: -1 };
+}
+
+/** The row could not be created and no adjustment could fix it. */
+export class ProvisioningError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProvisioningError';
+  }
 }
 
 /**
@@ -173,63 +207,91 @@ export async function provisionUser(
     return { id: existing.id, publicKey: address, handle: existing.handle, created: false };
   }
 
-  const handle = await uniqueHandle(deriveDesiredHandle(address, profile), address);
-  const values = {
-    publicKey: address,
-    handle,
-    name: profile.name?.trim() || handle,
-    email: profile.email ?? null,
-    phone: profile.phone ?? null,
-    country: profile.country ?? null,
-    language: profile.language ?? 'en',
-    lastLoginAt: now,
-    createdAt: now,
-    updatedAt: now,
-  };
+  const baseHandle = deriveDesiredHandle(address, profile);
+  const wantedName = profile.name?.trim() || null;
+  let handle = baseHandle;
+  let email = profile.email ?? null;
+  let usedWidths: number[] = [];
 
-  const [row] = await db.insert(usersTable).values(values).onConflictDoNothing().returning({
-    id: usersTable.id,
-    publicKey: usersTable.publicKey,
-    handle: usersTable.handle,
-  });
+  // The insert can lose a race with another wallet that wants the same
+  // handle or the same e-mail. Each attempt adjusts exactly the field that
+  // collided, so a lost race never costs the user data it did not have to.
+  for (let attempt = 0; attempt < MAX_INSERT_ATTEMPTS; attempt += 1) {
+    const [row] = await db
+      .insert(usersTable)
+      .values({
+        publicKey: address,
+        handle,
+        name: wantedName || handle,
+        email,
+        phone: profile.phone ?? null,
+        country: profile.country ?? null,
+        language: profile.language ?? 'en',
+        lastLoginAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing()
+      .returning({
+        id: usersTable.id,
+        publicKey: usersTable.publicKey,
+        handle: usersTable.handle,
+      });
 
-  if (row) {
-    return { id: row.id, publicKey: row.publicKey, handle: row.handle, created: true };
+    if (row) {
+      return { id: row.id, publicKey: row.publicKey, handle: row.handle, created: true };
+    }
+
+    // The insert did not land. Which constraint refused it?
+    const [byWallet] = await db
+      .select({ id: usersTable.id, publicKey: usersTable.publicKey, handle: usersTable.handle })
+      .from(usersTable)
+      .where(eq(usersTable.publicKey, address))
+      .limit(1);
+    if (byWallet) {
+      // A concurrent request created OUR row: it is ours, and the call is
+      // idempotent, so it is the same answer.
+      return {
+        id: byWallet.id,
+        publicKey: byWallet.publicKey,
+        handle: byWallet.handle,
+        created: false,
+      };
+    }
+
+    if (email !== null) {
+      const [emailOwner] = await db
+        .select({ publicKey: usersTable.publicKey })
+        .from(usersTable)
+        .where(eq(usersTable.email, email))
+        .limit(1);
+      if (emailOwner && emailOwner.publicKey !== address) {
+        // The e-mail belongs to another wallet. The row is still needed, so
+        // the e-mail goes and the handle — which nobody else wanted — stays.
+        // The address in Dynamic still has it, so nothing is truly lost.
+        email = null;
+        continue;
+      }
+    }
+
+    const [handleOwner] = await db
+      .select({ publicKey: usersTable.publicKey })
+      .from(usersTable)
+      .where(eq(usersTable.handle, handle))
+      .limit(1);
+    if (handleOwner && handleOwner.publicKey !== address) {
+      // Two wallets want the same handle. The address disambiguates it,
+      // always with the same widening rule.
+      const resolution = await resolveHandle(baseHandle, address, usedWidths);
+      usedWidths = [...usedWidths, resolution.width];
+      handle = resolution.handle;
+      continue;
+    }
+
+    // Nothing explains the refusal: the row was turned down for a reason
+    // this code cannot see. Retrying would only repeat it.
+    break;
   }
 
-  // The insert did not land. Either a concurrent request created the row
-  // (then it is ours) or the e-mail collides with another user's — the
-  // table is unique on it, and two wallets can share one address.
-  const [raced] = await db
-    .select({ id: usersTable.id, publicKey: usersTable.publicKey, handle: usersTable.handle })
-    .from(usersTable)
-    .where(eq(usersTable.publicKey, address))
-    .limit(1);
-  if (raced) {
-    return { id: raced.id, publicKey: raced.publicKey, handle: raced.handle, created: false };
-  }
-
-  // The e-mail is the collision. The row is still needed, so the e-mail goes
-  // and the handle is disambiguated: an account without an e-mail address is
-  // better than an account that does not exist.
-  const fallbackHandle = await uniqueHandle(
-    `${handle.slice(0, MAX_HANDLE_LENGTH - 5)}-${address.slice(0, 4).toLowerCase()}`,
-    address
-  );
-  const [fallback] = await db
-    .insert(usersTable)
-    .values({ ...values, handle: fallbackHandle, email: null })
-    .onConflictDoNothing()
-    .returning({ id: usersTable.id, publicKey: usersTable.publicKey, handle: usersTable.handle });
-
-  if (fallback) {
-    return {
-      id: fallback.id,
-      publicKey: fallback.publicKey,
-      handle: fallback.handle,
-      created: true,
-    };
-  }
-
-  throw new Error('the user row could not be created');
+  throw new ProvisioningError('the user row could not be created');
 }

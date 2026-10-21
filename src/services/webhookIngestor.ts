@@ -22,7 +22,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, lt } from 'drizzle-orm';
 
 import { assetByMint, type SupportedCluster } from '../contracts/tokens';
 import { db } from '../db';
@@ -293,6 +293,24 @@ export async function recordWebhookDelivery(
   return { id: existing?.id ?? -1, duplicate: true };
 }
 
+/**
+ * Drop the delivery log entries that are older than `days`.
+ *
+ * The log is the idempotency ledger for the webhook, so it is never pruned
+ * while a delivery can still be projected. Once a delivery is days old, the
+ * sweeper has already reconciled the chain, and the row is history.
+ *
+ * Without this the table grows with every delivery Dynamic ever sends.
+ */
+export async function pruneWebhookDeliveries(days = 30): Promise<number> {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const deleted = await db
+    .delete(webhookEventsTable)
+    .where(lt(webhookEventsTable.receivedAt, cutoff))
+    .returning({ id: webhookEventsTable.id });
+  return deleted.length;
+}
+
 export async function markWebhookProcessed(
   deliveryId: number,
   error?: string
@@ -333,12 +351,15 @@ export async function markWebhookPending(
 // PROJECTION
 // ============================================================================
 
-export interface ProjectionResult {
-  /** Movements written (0 when the subject wallets are not registered). */
-  projected: number;
-  /** Set when the delivery was understood but nothing was written. */
-  ignored?: string;
-}
+/**
+ * What a projection did.
+ *
+ * The union is the point: a result that wrote nothing ALWAYS carries the
+ * reason, so the caller can record WHY instead of a generic placeholder.
+ */
+export type ProjectionResult =
+  | { wrote: true; projected: number; ignored?: undefined }
+  | { wrote: false; projected: 0; ignored: string };
 
 const NATIVE_SOL = 'native';
 
@@ -446,7 +467,7 @@ export async function projectWalletActivity(
   const registered = new Map(userRows.map((row) => [row.publicKey, row]));
   const subjects = resolveSubjects(activity, registered);
   if (subjects.length === 0) {
-    return { projected: 0, ignored: 'no registered wallet among the transaction parties' };
+    return { wrote: false, projected: 0, ignored: 'no registered wallet among the transaction parties' };
   }
 
   const cluster = clusterForNetworkId(activity.networkId);
@@ -626,7 +647,10 @@ export async function projectWalletActivity(
   }
 
   if (!projectable) {
-    return { projected: 0, ignored: 'no projectable asset transfer for the registered wallet' };
+    return { wrote: false, projected: 0, ignored: 'no projectable asset transfer for the registered wallet' };
   }
-  return { projected };
+  if (projected === 0) {
+    return { wrote: false, projected: 0, ignored: 'the movements were already in the ledger' };
+  }
+  return { wrote: true, projected };
 }

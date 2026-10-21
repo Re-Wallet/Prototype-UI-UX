@@ -496,6 +496,62 @@ it was permanently zero); an expired link could still be claimed; and
 - `GET /api/wallet` keeps its shape and reads the balance from the chain, so
   there is one source of truth for money.
 
+### Progress — 2026-10-21 (the second review round, and what it changed)
+
+The tranche after Phase 0 was reviewed with the four lenses. The first
+review came back **escalated**: one finding corroborated, two with an
+unknown causality. All three were real, and all three are now closed.
+
+| What the review found | What changed |
+|---|---|
+| The webhook consumed a delivery even when the projection wrote **nothing** — `markWebhookProcessed` set `processed_at` on the failure path and on the "no registered wallet" path, so the movement was dropped for good and the reprojectable dedupe could never fire | A delivery is only consumed once it actually wrote a movement. A new `markWebhookPending` records the reason and leaves `processed_at` null, so the redelivery (or the sweeper) can still project it. Verified against the database: first delivery → reprojectable; after `markWebhookProcessed` → consumed |
+| A provisioning failure was only written to the console — which the unit's own acceptance criteria forbid | The app retries three times, and when the retries run out it shows a banner that stays until the page is reloaded. A four-second toast is not enough for something the user has to act on |
+| The confirmation budget was six attempts (~10.5 s), less than the thirteen seconds a transaction needs to reach `finalized` | The budget is a **deadline** of 20 s that covers the finalization window, with the attempt count kept as a safety cap |
+| The endpoint comment claimed the address never comes from the body | It says what the middleware actually does: the body proposes it, the session decides, and the handler uses the checked value |
+| A snapshot that could not read the chain reported a balance of **zero** | It reports `null`. "We do not know" and "you have nothing" are different answers, and a payment app must not confuse them |
+
+**The second round** found four more, all in the new provisioning code, and
+all four were real:
+
+- The insert could lose a race on the handle or the e-mail unique
+  constraints, and the fallback dropped the e-mail **whatever** had
+  collided. The insert is now a bounded retry loop that diagnoses **which**
+  constraint refused the row and adjusts only that field: a lost e-mail
+  drops the e-mail, a lost handle is disambiguated with the same widening
+  rule, and a row created by a concurrent request is returned as ours.
+- The e-mail fallback used a different disambiguation than the normal
+  path. Both now go through the same resolver.
+- A row that could not be created for any reason this code can see threw a
+  bare error, which reached the client as a 500. It is now a typed
+  `ProvisioningError` and the route answers **503** with a message the
+  client can act on.
+- The pending reason for a delivery that wrote nothing was a generic
+  string that hid the cause. `ProjectionResult` is now a discriminated
+  union: a result that wrote nothing **always** carries the reason, by
+  construction.
+
+**Two findings were false positives**, and the refuter did not catch them
+because it had no probe: the claim that `onConflictDoNothing()` only
+handles primary-key conflicts (in Postgres it handles every unique
+constraint), and the claim that the claim endpoint passes the payment
+reference where a transaction signature belongs (it passes the signature
+from the request body; the reference is only used to look the link up).
+
+**One gap was closed instead of documented**: the delivery log grew with
+every delivery Dynamic ever sent. The sweeper now prunes the entries older
+than thirty days — by then the chain has been reconciled.
+
+**One gap is documented instead of closed**: a notification can be
+duplicated by a *concurrent* redelivery, because the deduplication is a
+check-then-insert. It is a second banner, not a second movement, and
+closing it means a unique index — a schema change, so it belongs with the
+Fase 1 migrations.
+
+**Verification**: `npm test` → **136 tests, 136 pass, 0 fail**; `tsc
+--noEmit` clean; the provisioning collision path verified against the real
+database (two wallets, one e-mail, one handle → the second gets a
+disambiguated handle and no e-mail, and the call is idempotent).
+
 
 
 
