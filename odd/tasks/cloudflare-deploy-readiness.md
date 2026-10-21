@@ -362,6 +362,14 @@ sweeper with its batch cursor, `wrangler.toml`, CI, the custom domain, and
 the deployment. Those are documented in the README and planned. The advisory
 findings above are later work, not a reason to re-run this review.
 
+**Engram mirror: pending.** `mem_save` failed three times in this session
+with "could not confirm Engram session registration". The Engram server
+itself is healthy (`mem_doctor`: 9/10 checks ok, and the one error is an
+unrelated `sync_target_closed_space` finding for other projects). This file
+is the source of truth and it is committed; the mirror is retried whenever the
+session registration recovers.
+
+
 
 
 
