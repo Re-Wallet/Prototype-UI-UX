@@ -8,6 +8,7 @@
 import type { Transaction } from '../types/wallet';
 import type { SealedLiveQuery } from '@neon/realtime/client';
 import type { LiveTransactionRow } from './transactionMapper';
+import { getDynamicClient } from '../dynamicClient';
 
 /**
  * Base URL for API calls.
@@ -33,11 +34,37 @@ export interface RecentRecipient {
   lastSentAt: number | null;
 }
 
+/**
+ * The session credential, when there is one.
+ *
+ * Dynamic signs the session and the server verifies that signature, so the
+ * wallet the API acts on comes from a signed claim instead of a parameter
+ * the caller chose. The token is `client.token` — a plain getter, not a
+ * hook — so it is read at call time: the value changes when the user signs
+ * in or out, and a captured value would go stale.
+ */
+function sessionToken(): string | null {
+  try {
+    const token = getDynamicClient().token;
+    return typeof token === 'string' && token.length > 0 ? token : null;
+  } catch {
+    // No Dynamic client yet: no environment id, or the SDK has not been
+    // created. The request still goes out — a user-scoped route answers 401
+    // and a public route answers normally.
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = sessionToken();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
   });
   if (!response.ok) {
     throw new Error(`${path} responded ${response.status}`);
@@ -114,17 +141,23 @@ export async function fetchWalletBalances(
   }
 }
 
-/** Wire shape of the public identity lookup for a Solana address. */
+/**
+ * Wire shape of the public identity lookup for a Solana address.
+ *
+ * The display handle only. The account e-mail used to be part of this
+ * payload, and a public route keyed by an on-chain address is a directory
+ * scraper rather than a lookup: every pubkey is public, so publishing the
+ * e-mail behind it would have handed out the user directory.
+ */
 export interface WalletIdentity {
-  email: string | null;
   handle: string | null;
 }
 
 /**
- * Registered email/handle for a wallet address (used by the payment page so
- * the payer sees "Pagar a {email}" instead of a raw pubkey). Returns null for
- * unknown addresses, offline API, or invalid input — the caller falls back to
- * a shortened address.
+ * Registered handle for a wallet address (used by the payment page so the
+ * payer sees "Pagar a {handle}" instead of a raw pubkey). Returns null for
+ * unknown addresses, offline API, or invalid input — the caller falls back
+ * to a shortened address.
  */
 export async function fetchWalletIdentity(
   address: string

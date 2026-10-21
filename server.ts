@@ -26,6 +26,7 @@ dotenv.config({ path: ['.env.local', '.env'] });
 
 import express, { type Request, type Response } from 'express';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
   countUnreadNotifications,
@@ -73,6 +74,17 @@ import { eq } from 'drizzle-orm';
 
 import { db, pool, warmPool } from './src/db';
 import { landingSurveyResponses, users as usersTable } from './src/db/schema';
+import {
+  createCorsMiddleware,
+  createDynamicSessionVerifier,
+  createRateLimiter,
+  defaultAllowedOrigins,
+  parseOriginPatterns,
+  requireSessionFor,
+  securityHeaders,
+  walletFromBody,
+  walletFromQuery,
+} from './src/server/security';
 
 const app = express();
 /**
@@ -114,14 +126,70 @@ app.use(
   })
 );
 
-// Permissive CORS for local development (vite dev server on another port).
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, x-dynamic-signature-256');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
+// ============================================================================
+// SECURITY LAYER
+// ============================================================================
+
+/**
+ * The Dynamic environment this deployment belongs to.
+ *
+ * It is also the path of the signing keys, so a token minted by another
+ * Dynamic environment cannot verify here even when it is copied verbatim.
+ */
+const DYNAMIC_ENVIRONMENT_ID =
+  process.env.DYNAMIC_ENVIRONMENT_ID ?? process.env.VITE_DYNAMIC_ENVIRONMENT_ID ?? '';
+
+/**
+ * The session verifier.
+ *
+ * A deployment without an environment id cannot verify anything, so every
+ * user-scoped route answers 401. That is the safe default: an API that
+ * cannot authenticate must not pretend it can.
+ */
+const sessionVerifier = createDynamicSessionVerifier({
+  environmentId: DYNAMIC_ENVIRONMENT_ID,
 });
+
+/**
+ * The origins allowed to call this API.
+ *
+ * The local dev servers are always allowed; a deployment adds its own
+ * through `APP_ORIGINS` (comma-separated, one wildcard segment allowed).
+ */
+const allowedOrigins = [
+  ...defaultAllowedOrigins(),
+  ...parseOriginPatterns(process.env.APP_ORIGINS),
+];
+
+/**
+ * The gate for a user-scoped route.
+ *
+ * A verified session that controls the wallet the route is about. Both
+ * checks run before the handler, so an unauthenticated request never
+ * reaches the database.
+ */
+const sessionGate = (read: (req: Request) => unknown) => requireSessionFor(sessionVerifier, read);
+
+/**
+ * Rate limits.
+ *
+ * The claim endpoint is the tight one: it spends the shared Solana RPC
+ * budget on behalf of whoever calls it, and that budget is what the real
+ * users' balance reads live on. These counters live in the process, so the
+ * authoritative limit is a Cloudflare WAF rule at the edge; this is the
+ * application-level floor.
+ */
+const claimRateLimit = createRateLimiter({ limit: 10, windowMs: 60_000 });
+const createLinkRateLimit = createRateLimiter({ limit: 30, windowMs: 60_000 });
+const writeRateLimit = createRateLimiter({ limit: 60, windowMs: 60_000 });
+const readRateLimit = createRateLimiter({ limit: 120, windowMs: 60_000 });
+
+// Security headers first, so every response carries them — including the
+// preflight answers below.
+app.use(securityHeaders({ hsts: process.env.NODE_ENV === 'production' }));
+
+// The CORS allowlist replaces the old wildcard.
+app.use(createCorsMiddleware({ allowedOrigins }));
 
 // Counts the database round-trips of each request and publishes the total in
 // the `X-DB-Queries` header. With a remote database every round-trip costs a
@@ -272,7 +340,7 @@ app.get('/api/health', async (_req, res) => {
 // WALLET
 // ============================================================================
 
-app.get('/api/wallet', async (req, res) => {
+app.get('/api/wallet', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   // Scoped by the wallet, like every other wallet endpoint. Without the
   // parameter this used to return the PRIMARY user's full profile — email,
   // phone, balance, history and contacts — to anyone who asked.
@@ -291,7 +359,7 @@ app.get('/api/wallet', async (req, res) => {
   res.json(snapshot);
 });
 
-app.get('/api/wallet/transactions', async (req, res) => {
+app.get('/api/wallet/transactions', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   // Scoped by the caller's wallet so a multi-user DB never mixes histories.
   // Falls back to the primary user for older callers that omit the param.
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
@@ -309,7 +377,7 @@ app.get('/api/wallet/transactions', async (req, res) => {
  * query reach the UI without a refetch. The DB query itself never leaves
  * the server — only its encrypted, expiring capability does.
  */
-app.post('/api/wallet/transactions/live', async (req, res) => {
+app.post('/api/wallet/transactions/live', sessionGate(walletFromBody), async (req: Request, res: Response) => {
   const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
   if (!wallet || !BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet body field must be a base58 Solana address.' });
@@ -332,7 +400,7 @@ app.post('/api/wallet/transactions/live', async (req, res) => {
  * or sweep lands. The webhook projection later upserts the same
  * `(user, referenceId)` row with `completed`.
  */
-app.post('/api/wallet/transactions/pending', async (req, res) => {
+app.post('/api/wallet/transactions/pending', sessionGate(walletFromBody), writeRateLimit, async (req: Request, res: Response) => {
   const { wallet, signature, counterpartyPubkey, amountUsdc, assetSymbol, note } = req.body ?? {};
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: "wallet must be the sender's base58 Solana address." });
@@ -383,7 +451,7 @@ app.post('/api/wallet/transactions/pending', async (req, res) => {
  * Scoped by `wallet` like the transaction history so a multi-user DB never
  * mixes feeds; falls back to the primary user for older callers.
  */
-app.get('/api/wallet/notifications', async (req, res) => {
+app.get('/api/wallet/notifications', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
   const userId = wallet ? await getUserIdByPubkey(wallet) : null;
   if (userId === null) {
@@ -403,7 +471,7 @@ app.get('/api/wallet/notifications', async (req, res) => {
  * Mark notifications read once the user opens the feed. Body:
  * `{ wallet, ids? }` — omit `ids` to clear the whole feed.
  */
-app.post('/api/wallet/notifications/read', async (req, res) => {
+app.post('/api/wallet/notifications/read', sessionGate(walletFromBody), writeRateLimit, async (req: Request, res: Response) => {
   const { wallet, ids } = req.body ?? {};
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: 'wallet must be the base58 Solana address.' });
@@ -425,7 +493,7 @@ app.post('/api/wallet/notifications/read', async (req, res) => {
 
 // Contacts are scoped to the authenticated session: the client sends the
 // Dynamic wallet address so each user sees only the recipients THEY sent to.
-app.get('/api/wallet/contacts', async (req, res) => {
+app.get('/api/wallet/contacts', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
   if (!BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
@@ -441,7 +509,7 @@ app.get('/api/wallet/contacts', async (req, res) => {
   );
 });
 
-app.get('/api/wallet/balances', async (req, res) => {
+app.get('/api/wallet/balances', sessionGate(walletFromQuery), readRateLimit, async (req: Request, res: Response) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
   if (!BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
@@ -469,7 +537,7 @@ app.get('/api/wallet/balances', async (req, res) => {
  * slug, persists the row with `status: 'active'`, and returns the reference
  * so the client can embed it in the payment URL.
  */
-app.post('/api/payment-links', async (req, res) => {
+app.post('/api/payment-links', sessionGate(walletFromBody), createLinkRateLimit, async (req: Request, res: Response) => {
   const { wallet, amountUsdc, concept } = req.body ?? {};
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: 'wallet must be the base58 recipient address.' });
@@ -567,7 +635,7 @@ app.get('/api/payment-links/by-slug/:slug', async (req, res) => {
 /**
  * List a user's payment links, newest first.
  */
-app.get('/api/payment-links', async (req, res) => {
+app.get('/api/payment-links', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
   if (!BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
@@ -588,7 +656,7 @@ app.get('/api/payment-links', async (req, res) => {
  * collector's screen updates to "Pago recibido" without polling. The DB
  * query never leaves the server; only its encrypted, expiring capability does.
  */
-app.post('/api/payment-links/live', async (req, res) => {
+app.post('/api/payment-links/live', sessionGate(walletFromBody), async (req: Request, res: Response) => {
   const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
   if (!wallet || !BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet body field must be a base58 Solana address.' });
@@ -606,9 +674,15 @@ app.post('/api/payment-links/live', async (req, res) => {
 });
 
 /**
- * Public identity for a wallet address: the registered email/handle so the
- * payment page can show "Pagar a {email}" instead of a raw pubkey. Unknown
+ * Public identity for a wallet address: the display handle, so the payment
+ * page can show "Pagar a {handle}" instead of a raw pubkey. Unknown
  * addresses answer nulls (not an error) and the client falls back.
+ *
+ * The account e-mail used to be part of this payload. It is not any more:
+ * this route is public and its input is an on-chain address, which anybody
+ * can enumerate, so publishing the e-mail behind it turned a lookup into a
+ * scraper for the user directory. The handle is the name the user chose to
+ * publish; the e-mail is not.
  */
 app.get('/api/wallet/identity', async (req, res) => {
   const address = typeof req.query.address === 'string' ? req.query.address.trim() : '';
@@ -616,23 +690,23 @@ app.get('/api/wallet/identity', async (req, res) => {
     return res.status(400).json({ error: 'address query param must be a base58 Solana address.' });
   }
   // The display identity of a wallet changes only when the user edits their
-  // profile, so it is cached. Only the two display fields are read.
+  // profile, so it is cached. Only the display field is read.
   const identity = await getCached(
     cacheKey.identity(address),
     async () => {
       const [row] = await db
-        .select({ email: usersTable.email, handle: usersTable.handle })
+        .select({ handle: usersTable.handle })
         .from(usersTable)
         .where(eq(usersTable.publicKey, address))
         .limit(1);
-      return { email: row?.email ?? null, handle: row?.handle ?? null };
+      return { handle: row?.handle ?? null };
     },
     { ttlMs: 300_000 }
   );
   res.json(identity);
 });
 
-app.post('/api/wallet/contacts', async (req, res) => {
+app.post('/api/wallet/contacts', sessionGate(walletFromBody), writeRateLimit, async (req: Request, res: Response) => {
   const { wallet, publicKey, name } = req.body ?? {};
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: 'wallet must be the sender\'s base58 Solana address.' });
@@ -657,7 +731,7 @@ app.post('/api/wallet/contacts', async (req, res) => {
 // SETTINGS
 // ============================================================================
 
-app.patch('/api/settings/language', async (req, res) => {
+app.patch('/api/settings/language', sessionGate(walletFromBody), writeRateLimit, async (req: Request, res: Response) => {
   // Scoped by the wallet: without it, any caller could rewrite the language
   // of whichever user happens to be first in the table.
   const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
@@ -699,7 +773,7 @@ app.patch('/api/settings/language', async (req, res) => {
  * and verifies ON-CHAIN that the transaction really moved the link's amount
  * to its recipient, before settling that specific link.
  */
-app.post('/api/payment-links/claim', async (req, res) => {
+app.post('/api/payment-links/claim', claimRateLimit, async (req: Request, res: Response) => {
   const { reference, signature } = req.body ?? {};
   if (typeof reference !== 'string' || !reference.trim()) {
     return res.status(400).json({ error: 'reference is required.' });
@@ -900,26 +974,63 @@ if (process.env.NODE_ENV === 'production') {
   app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 }
 
-app.listen(PORT, HOST, () => {
-  console.log(`\n🚀 ReWallet prototype API listening on http://localhost:${PORT}`);
-  console.log(`   GET  /api/health`);
-  console.log(`   GET  /api/wallet`);
-  console.log(`   GET  /api/wallet/transactions?wallet=<address>`);
-  console.log(`   POST /api/wallet/transactions/pending`);
-  console.log(`   POST /api/webhooks/dynamic`);
-  console.log(`   GET  /api/wallet/contacts`);
-  console.log(`   POST /api/wallet/contacts`);
-  console.log(`   GET  /api/wallet/balances?wallet=<address>&fresh=1`);
-  console.log(`   GET  /api/wallet/notifications?wallet=<address>`);
-  console.log(`   POST /api/wallet/notifications/read`);
-  console.log(`   GET  /api/landing/metrics\n`);
+/**
+ * Should this process open the listening socket?
+ *
+ * `API_NO_LISTEN=1` is the explicit opt-out used by the test suite, which
+ * mounts the app on an ephemeral port of its own. The entry-point check is
+ * the normal path. When the entry point cannot be determined the answer is
+ * *yes*: a server that silently does not start is far worse than one that
+ * starts twice.
+ */
+function shouldListen(): boolean {
+  if (process.env.API_NO_LISTEN === '1') return false;
 
-  startHistorySweeper();
+  const entry = process.argv[1];
+  if (!entry) return true;
 
-  // Warm the database pool in the background: the first user request should
-  // not pay for the TCP + TLS handshake to Neon.
-  void warmPool();
-});
+  try {
+    return import.meta.url === pathToFileURL(path.resolve(entry)).href;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Start the HTTP listener.
+ *
+ * The app is exported so a test can mount it on an ephemeral port and
+ * exercise the real routes — including the ones that must answer 401
+ * before they touch the database.
+ */
+export function startServer(): void {
+  app.listen(PORT, HOST, () => {
+    console.log(`\n🚀 ReWallet prototype API listening on http://localhost:${PORT}`);
+    console.log(`   GET  /api/health`);
+    console.log(`   GET  /api/wallet`);
+    console.log(`   GET  /api/wallet/transactions?wallet=<address>`);
+    console.log(`   POST /api/wallet/transactions/pending`);
+    console.log(`   POST /api/webhooks/dynamic`);
+    console.log(`   GET  /api/wallet/contacts`);
+    console.log(`   POST /api/wallet/contacts`);
+    console.log(`   GET  /api/wallet/balances?wallet=<address>&fresh=1`);
+    console.log(`   GET  /api/wallet/notifications?wallet=<address>`);
+    console.log(`   POST /api/wallet/notifications/read`);
+    console.log(`   GET  /api/landing/metrics\n`);
+
+    startHistorySweeper();
+
+    // Warm the database pool in the background: the first user request should
+    // not pay for the TCP + TLS handshake to Neon.
+    void warmPool();
+  });
+}
+
+if (shouldListen()) {
+  startServer();
+}
+
+export { app };
 
 /**
  * Periodic RPC sweep over every registered wallet.

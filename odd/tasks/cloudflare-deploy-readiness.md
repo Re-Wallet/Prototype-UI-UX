@@ -106,15 +106,15 @@ Express sets no security headers. A wallet UI that requests transaction signatur
 
 | ID | Task | Specs | Route | Status | Commit |
 |----|------|-------|-------|--------|--------|
-| T1 | Document the deployment plan and the local team workflow in the README | S1, S2 | inline | done | (this commit) |
-| T2 | Extract the Express app so it can be tested; export `app`, guard `listen` | S3 | inline | pending | — |
-| T3 | Session verification module (JWKS + RS256 + claims) with dependency injection | S3 | inline | pending | — |
-| T4 | Session middleware: extract credential, resolve the user's Solana addresses, resolve `userId` | S3 | inline | pending | — |
-| T5 | Apply the session requirement to every user-scoped route | S3, S7 | inline | pending | — |
-| T6 | Client sends the session credential; identity endpoint stops leaking e-mail | S3, S7 | inline | pending | — |
-| T7 | CORS allowlist, rate limiter, security headers | S4, S5, S6 | inline | pending | — |
-| T8 | Tests: RED→GREEN for the session gate, CORS, rate limit, headers | S3, S4, S5, S6, S7, S8 | inline | pending | — |
-| T9 | Full suite + typecheck; work-unit commits; native review assessment | S8 | inline | pending | — |
+| T1 | Document the deployment plan and the local team workflow in the README | S1, S2 | inline | done | `5c53aa3` |
+| T2 | Extract the Express app so it can be tested; export `app`, guard `listen` | S3 | inline | done | `74d020f`, this commit |
+| T3 | Session verification module (JWKS + RS256 + claims) with dependency injection | S3 | inline | done | `74d020f` |
+| T4 | Session middleware: extract credential, resolve the user's Solana addresses, resolve `userId` | S3 | inline | done | `74d020f` |
+| T5 | Apply the session requirement to every user-scoped route | S3, S7 | inline | done | this commit |
+| T6 | Client sends the session credential; identity endpoint stops leaking e-mail | S3, S7 | inline | done | this commit |
+| T7 | CORS allowlist, rate limiter, security headers | S4, S5, S6 | inline | done | `6c4d0b0` |
+| T8 | Tests: RED→GREEN for the session gate, CORS, rate limit, headers | S3, S4, S5, S6, S7, S8 | inline | done | `74d020f`, `6c4d0b0`, this commit |
+| T9 | Full suite + typecheck; work-unit commits; native review assessment | S8 | inline | done | this commit |
 
 **Route note**: every task runs inline. No Writer trigger fires (no parallelism: one unit of behaviour; no context backstop: the parent already holds the full map from the exploration phase). The 4-file rule was satisfied by two read-only explorer delegations before this document was written.
 
@@ -162,9 +162,84 @@ Express sets no security headers. A wallet UI that requests transaction signatur
 
 **Explicit non-goals for this work unit**: the Workers port itself (Fase 1), the Cron/sweeper cursor, `wrangler.toml`, CI, the custom domain, and the actual deployment. Those are documented in the README and planned, not implemented, in this change.
 
-### Progress — 2026-10-21
+### Progress — 2026-10-21 (work unit 1)
 
 - **T1 done.** The README gained a `## Deployment` section (+287 lines) between `## Scripts` and `## Known limitations`. It covers: why the target is a Worker (the table of the serverless-hostile things this app does *not* have), the target shape diagram, the Cloudflare products used and the ones deliberately not used, the phase plan with Phase 0 marked in progress, the Phase 0 threat model, the local team workflow (per-teammate Neon branch, Dynamic environment, sweeper off, tunnel, the `audit:*` scripts), the Cloudflare runbook (environments, secrets, driver decision, migrations in CI, observability, rollout, go-live checklist), the platform limits with this repository's measurements, and the operational runbook. `## Roadmap to beta` gained item 9 pointing at it.
 - The API table in the README still describes the pre-Phase-0 surface. It is updated with the Phase 0 commit, not this one, so the documentation never claims a protection that is not in the tree yet.
 - **Engram mirror pending.** `mem_save` for this document failed twice with "could not confirm Engram session registration". The Engram server itself is healthy (`mem_doctor` reports 9/10 checks ok; the single error is an unrelated `sync_target_closed_space` finding for other projects). The file is the source of truth; the mirror is retried in the next work unit.
+
+### Progress — 2026-10-21 (work unit 2 — Phase 0)
+
+**T2–T8 done. Risk: item 2** (the API now authenticates its callers; the failure mode of a wrong gate is locking a user out of their own wallet, not a leak).
+
+**What changed**
+
+| File | Change |
+|---|---|
+| `src/server/security/dynamicSession.ts` | RS256 verification against Dynamic's JWKS, environment binding, `user:basic` scope, Solana address collection |
+| `src/server/security/session.ts` | `requireSession` (401), `requireOwnedWallet` (400/403), token extraction from the bearer header or a JWT-shaped cookie |
+| `src/server/security/cors.ts` | origin allowlist with one wildcard host label; wildcard `*` removed |
+| `src/server/security/rateLimit.ts` | sliding-window limiter keyed on `CF-Connecting-IP` |
+| `src/server/security/headers.ts` | CSP with `frame-ancestors 'none'`, `X-Frame-Options`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS |
+| `src/server/security/index.ts` | the barrel |
+| `server.ts` | the security layer, 13 gated routes, the identity endpoint, the rate limits, `app` exported, `listen` guarded |
+| `src/services/walletApi.ts` | sends `client.token` as a bearer credential; `WalletIdentity` no longer has an `email` |
+| `src/components/WebPaymentPage.tsx` | shows the merchant's `handle` instead of their e-mail |
+| `package.json` | `jose` dependency; the new test files in the `test` script |
+
+**RED evidence (the base commit, `main` at `12dde60`)**
+
+The base server was started from a detached worktree and probed with a
+**real** registered pubkey. The response was `HTTP 200` with the user's full
+profile — `id, name, handle, email, phone, avatarBg, avatarEmoji, country,
+publicKey, walletAddress, language, balanceUsdc, balanceSol, kycStatus`,
+plus `balance`, `transactions` and `contacts` — with
+`Access-Control-Allow-Origin: *` and **no** `X-Frame-Options`, **no**
+`Content-Security-Policy` and **no** `X-Content-Type-Options`. The response
+carried `X-DB-Queries: 4`: the request reached the database.
+
+**GREEN evidence (this branch)**
+
+| Probe | Base | Now |
+|---|---|---|
+| `GET /api/wallet?wallet=<real pubkey>`, no session | `200` + full profile, 4 DB queries | `401 {"reason":"missing_token"}`, **0 DB queries** |
+| Same, with a bogus bearer token | `200` + full profile | `401 {"reason":"malformed_token"}`, 0 DB queries |
+| `GET /api/wallet/identity?address=not-base58` (public) | `400` | `400` (still reachable — not gated) |
+| `Origin: https://evil.example` | `Access-Control-Allow-Origin: *` | no allow-origin header |
+| `Origin: http://127.0.0.1:3000` | `Access-Control-Allow-Origin: *` | `Access-Control-Allow-Origin: http://127.0.0.1:3000` + `Vary: Origin` |
+| Security headers on every response | none | CSP (`frame-ancestors 'none'`), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS in production |
+
+**Test suite**: `npm test` → **102 tests, 102 pass, 0 fail** (37 before, 65
+new). `npm run lint` (`tsc --noEmit`) → clean. The new tests are hermetic:
+the RSA key pair is generated in the test, the token is signed in the test,
+the key set is local, and the integration test never reaches the database.
+
+**Bugs found and fixed while writing the tests** (all were mine, all caught by
+the suite before the commit):
+
+1. `originMatches` split the whole origin on `*`, so a wildcard in the *host*
+   never matched. It now splits scheme, host and port, and matches the host
+   label.
+2. The environment check accepted a token whose `environmentId` claim named
+   another environment, because the issuer check rescued it. The claim is
+   now strict when it is present.
+3. Two test helpers destructured the recorded status code, capturing it
+   before the middleware ran — so a 204 and a 429 both read as 200. The
+   helpers return a live recorder now.
+4. The integration test left the Postgres pool open, so the test process
+   never exited and `npm test` hung. The test now touches no database at all.
+
+**Not done in this work unit** (and why)
+
+- The `users` table is unchanged and no migration ran: the session carries
+  the Solana address, and that address is what the ledger is keyed by.
+- The Dynamic webhook is untouched, and its HMAC still reads the raw body
+  captured by the `express.json` `verify` callback.
+- The CSP is asserted by tests but has **not** been validated in a browser
+  against the live Dynamic iframe. That is a go-live checklist item, not a
+  claim this change makes.
+- The JWKS is fetched live in production. The environment binding and the
+  scope check are verified against a local key set; the live JWKS endpoint
+  has to be confirmed in staging.
+
 

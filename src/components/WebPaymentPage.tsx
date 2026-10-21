@@ -348,7 +348,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             <div className="mb-5 w-full rounded-2xl border border-white/10 bg-[#161619] p-4">
               <p className="mb-2 text-xs text-zinc-400">Pagar a</p>
               <p className="font-mono text-sm text-zinc-200">
-                {recipientIdentity?.email ?? shortenAddress(intent.recipient)}
+                {recipientIdentity?.handle ?? shortenAddress(intent.recipient)}
               </p>
               <p className="mt-3 text-xs text-zinc-400">Cadena/Moneda</p>
               <p className="text-sm font-medium text-white">Solana/{asset?.symbol ?? 'USDC'}</p>

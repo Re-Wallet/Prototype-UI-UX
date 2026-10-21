@@ -514,21 +514,38 @@ All routes are served by `server.ts` (default `http://127.0.0.1:3001`).
 The UI calls them through `src/services/walletApi.ts`, which fails soft so the
 app keeps working on-chain data alone.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/webhooks/dynamic` | Dynamic webhook (HMAC-SHA256 verified, idempotent) |
-| GET | `/api/health` | Status + active cluster |
-| GET | `/api/wallet` | Full snapshot: user, balances, transactions, contacts |
-| GET | `/api/wallet/transactions?wallet=` | Projected history (RPC fallback lives client-side) |
-| POST | `/api/wallet/transactions/pending` | Record a just-signed transfer as pending |
-| GET | `/api/wallet/balances?wallet=&fresh=1` | Cached SOL/USDC; `fresh=1` bypasses the cache |
-| GET | `/api/wallet/notifications?wallet=` | Feed + unread count |
-| POST | `/api/wallet/notifications/read` | Mark all as read |
-| GET/POST | `/api/wallet/contacts` | Address book read / save recipient |
-| GET | `/api/wallet/identity?address=` | Registered email/handle for a pubkey |
-| PATCH | `/api/settings/language` | Persist the user's language |
-| GET | `/api/landing/metrics` | Landing metric strip: Dynamic topline (users/wallets/sessions) plus the ledger counters (transactions/volume/success rate/processing time) |
-| POST | `/api/landing/survey` | Stores a survey response (name, lastName, email, q1..q4). The form now lives in the app (home screen), not in the landing. |
+**Authentication.** Every route that reads or writes a user's data requires a
+verified **Dynamic session**: the browser sends `client.token` as a bearer
+credential, the server verifies its RS256 signature against Dynamic's JWKS for
+this environment, and the caller's wallet comes from the *signed* claim — not
+from a `?wallet=` parameter. A request without a valid session gets `401`; a
+request for a wallet the session does not control gets `403`. Both answers
+happen before the database is touched. The payer flow stays public on purpose
+(a payer may not be signed in) and relies on on-chain verification instead.
+See [Phase 0](#phase-0--the-gate-that-closes-first) for the reasoning.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/webhooks/dynamic` | HMAC | Dynamic webhook (HMAC-SHA256 verified, idempotent) |
+| GET | `/api/health` | public | Status + active cluster |
+| GET | `/api/wallet?wallet=` | session | Full snapshot: user, balances, transactions, contacts |
+| GET | `/api/wallet/transactions?wallet=` | session | Projected history (RPC fallback lives client-side) |
+| POST | `/api/wallet/transactions/live` | session | Seals the Realtime capability for the browser |
+| POST | `/api/wallet/transactions/pending` | session | Record a just-signed transfer as pending |
+| GET | `/api/wallet/balances?wallet=&fresh=1` | session | Cached SOL/USDC; `fresh=1` bypasses the cache |
+| GET | `/api/wallet/notifications?wallet=` | session | Feed + unread count |
+| POST | `/api/wallet/notifications/read` | session | Mark all as read |
+| GET/POST | `/api/wallet/contacts` | session | Address book read / save recipient |
+| GET | `/api/wallet/identity?address=` | public | Registered display handle for a pubkey (never the e-mail) |
+| PATCH | `/api/settings/language` | session | Persist the user's language |
+| GET/POST | `/api/payment-links` | session | List / create a single-use charge link |
+| POST | `/api/payment-links/live` | session | Seals the Realtime capability for the browser |
+| GET | `/api/payment-links/by-reference/:reference` | public | Link lookup for the payer page |
+| GET | `/api/payment-links/by-slug/:slug` | public | Link lookup for the payer page |
+| POST | `/api/payment-links/claim` | public (rate limited) | Settles a link after the on-chain verification |
+| GET | `/api/landing/metrics` | public | Landing metric strip: Dynamic topline (users/wallets/sessions) plus the ledger counters (transactions/volume/success rate/processing time) |
+| POST | `/api/landing/survey` | public (rate limited) | Stores a survey response (name, lastName, email, q1..q4). The form now lives in the app (home screen), not in the landing. |
+| GET | `/api/tunnel` | public | The quick tunnel's current URL (dev only) |
 
 ## Environment
 
@@ -557,6 +574,16 @@ NEON_REALTIME_DB=neondb                     # database name signed into the JWT
 # Dashboard API token with scope environment.analytics.read, used to fill
 # the landing metric strip. Without it the strip animates zeros.
 DYNAMIC_API_TOKEN=
+
+# ── Optional (server): security ───────────────────────────────────
+# Comma-separated origins allowed to call the API. The local dev servers
+# are always allowed; a deployment adds its own origin here. A pattern may
+# use one wildcard host label (https://*.trycloudflare.com).
+APP_ORIGINS=
+# The Dynamic environment id. Also the path of the signing keys, so a
+# session minted by another environment cannot verify here. Falls back to
+# VITE_DYNAMIC_ENVIRONMENT_ID.
+DYNAMIC_ENVIRONMENT_ID=
 
 # ── Optional (client) ─────────────────────────────────────────────
 # Public origin for shareable /pay links; empty = window.location.origin.
