@@ -64,6 +64,30 @@ function mergeTransactionLists(current: Transaction[], incoming: Transaction[]):
 }
 
 export default function App() {
+  /**
+   * The payment page is a PUBLIC route.
+   *
+   * A payer opens the link on another device, without an account, and the
+   * request they came to pay has to be reachable without the app's own
+   * sign-in wall. Behind the account gate, the link showed "Your wallet
+   * starts here" instead of the request — which read as "the app logged me
+   * out again", because the tunnel and the app's origin are different
+   * origins and the Dynamic session does not travel between them.
+   */
+  if (window.location.pathname === '/pay') {
+    return (
+      <div className="min-h-screen bg-[#070709] flex items-center justify-center p-0 sm:p-4 font-sans selection:bg-[#ff5a1f] selection:text-white antialiased">
+        <div className="w-full flex justify-center py-2 sm:py-4">
+          <PhoneFrame isFramed={true}>
+            <div className="relative flex-1 flex flex-col h-full overflow-hidden">
+              <WebPaymentPage onPaymentSubmitted={() => {}} />
+            </div>
+          </PhoneFrame>
+        </div>
+      </div>
+    );
+  }
+
   const tree = (
     <DynamicAccountGate>
       <WalletApp />
@@ -406,10 +430,6 @@ function WalletApp() {
 
   // Content renderer inside the phone screen
   const renderScreenContent = () => {
-    if (window.location.pathname === '/pay') {
-      return <WebPaymentPage onPaymentSubmitted={handleTransferComplete} />;
-    }
-
     // 1. Fullscreen Subflows
     if (activeFlow === 'deposit') {
       return (

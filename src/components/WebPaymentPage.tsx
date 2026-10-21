@@ -1,13 +1,23 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { transferAmount } from '@dynamic-labs-sdk/client';
 import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
-import { useGetWalletAccounts } from '@dynamic-labs-sdk/react-hooks';
-import { ArrowLeft, CheckCircle2, Loader2 } from 'lucide-react';
+import { useGetWalletAccounts, useInitStatus } from '@dynamic-labs-sdk/react-hooks';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 import { assetByMint, chain, type Address } from '../adapters';
 import { getDynamicClient } from '../dynamicClient';
+import { playPaymentConfirmed, unlockAudio } from '../services/sound';
+import { BackToHomeButton } from './BackToHomeButton';
+import { SignInScreen } from './DynamicSignIn';
+import { useEnsureSolanaWallet } from '../services/dynamicWallet';
 import type { Transaction } from '../types/wallet';
 import { parseWebPaymentUrl, type WebPaymentIntent } from '../services/webPaymentLink';
-import { fetchWalletIdentity, fetchPaymentLinkByReference, type WalletIdentity } from '../services/walletApi';
+import {
+  claimPaymentLink,
+  fetchWalletIdentity,
+  fetchPaymentLinkByReference,
+  resolveAppHomeUrl,
+  type WalletIdentity,
+} from '../services/walletApi';
 
 function shortenAddress(address: string): string {
   if (address.length <= 12) return address;
@@ -24,8 +34,12 @@ function getIntent(): WebPaymentIntent | null {
 
 export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitted }) => {
   const intent = useMemo(getIntent, []);
+  const { data: initStatus } = useInitStatus();
   const { data: walletAccounts = [] } = useGetWalletAccounts();
   const payerWallet = walletAccounts.find(isSolanaWalletAccount);
+  // A payer who signs in from the link needs a wallet to pay from, exactly
+  // like a user who signs in from the home screen.
+  const { walletError, isCreating: isCreatingWallet } = useEnsureSolanaWallet();
   const [balance, setBalance] = useState<number | null>(null);
   const [amountInput, setAmountInput] = useState(intent?.amount?.toString() ?? '');
   const [isLoadingBalance, setIsLoadingBalance] = useState(false);
@@ -34,6 +48,13 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
   const [signature, setSignature] = useState<string | null>(null);
   const [recipientIdentity, setRecipientIdentity] = useState<WalletIdentity | null>(null);
   const [linkStatus, setLinkStatus] = useState<'unknown' | 'active' | 'paid' | 'partial' | 'expired' | 'cancelled'>('unknown');
+  /**
+   * Whether the link status is known yet.
+   *
+   * Until the check resolves, the pay form must not be usable: a payer who
+   * opens an already-settled link would otherwise see a live-looking form.
+   */
+  const [linkStatusResolved, setLinkStatusResolved] = useState<boolean>(false);
 
   const asset = useMemo(
     () => intent ? assetByMint(intent.mint, intent.cluster) : null,
@@ -94,15 +115,28 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
   // block the form. Fails soft: without a reference the page behaves as before.
   useEffect(() => {
     let cancelled = false;
-    if (!intent?.reference) return;
-    void fetchPaymentLinkByReference(intent.reference).then((link) => {
-      if (cancelled || !link) return;
-      setLinkStatus(link.status);
-    });
+    if (!intent?.reference) {
+      // Not a single-use link: there is no status to wait for.
+      setLinkStatusResolved(true);
+      return;
+    }
+    setLinkStatusResolved(false);
+    void fetchPaymentLinkByReference(intent.reference)
+      .then((link) => {
+        if (cancelled) return;
+        setLinkStatus(link?.status ?? 'unknown');
+      })
+      .finally(() => {
+        if (!cancelled) setLinkStatusResolved(true);
+      });
     return () => {
       cancelled = true;
     };
   }, [intent?.reference]);
+
+  /** The link is settled: it must not be paid again. */
+  const linkSettled =
+    linkStatus === 'paid' || linkStatus === 'expired' || linkStatus === 'cancelled';
 
   const handlePay = async () => {
     if (!intent || !asset || !payerWallet) {
@@ -117,6 +151,13 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
       setError('No puedes pagarte a tu propia wallet desde esta cuenta.');
       return;
     }
+    // Single-use guard: the button is disabled for settled links, but the
+    // status can flip to `paid` between render and click (the webhook may
+    // land mid-session). Re-check before signing so a link is never paid twice.
+    if (linkSettled) {
+      setError('Este cargo ya no está disponible.');
+      return;
+    }
     if (!isValidAmount || !Number.isFinite(amount) || amount <= 0 || amount > (balance ?? 0)) {
       setError('Ingresa un monto válido que no supere tu saldo USDC disponible.');
       return;
@@ -124,6 +165,8 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
 
     setIsPaying(true);
     setError(null);
+    // Browsers only allow audio after a user gesture: this click is it.
+    unlockAudio();
     try {
       // Dynamic resolves the signing cluster from its provider's active
       // network, not from this app's cluster. Confirm both agree before
@@ -149,6 +192,16 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
         token: { address: asset.mint, decimals: asset.decimals },
       }, getDynamicClient());
       setSignature(transactionHash);
+      // The payer hears the confirmation as soon as the transfer is signed.
+      playPaymentConfirmed();
+
+      // Declare which link this payment settles. The reference is not on
+      // chain, so the server would otherwise have to guess between
+      // same-amount links and could settle the wrong one — leaving this one
+      // payable a second time. Fail-soft: the webhook is the fallback.
+      if (intent.reference) {
+        void claimPaymentLink(intent.reference, transactionHash);
+      }
       onPaymentSubmitted({
         id: transactionHash,
         title: intent.message || 'Pago Solana',
@@ -174,7 +227,14 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
     }
   };
 
-  const closePaymentPage = () => window.location.assign('/');
+  /**
+   * "Inicio" returns to the app, not to the current origin.
+   *
+   * During development the payment link points at the tunnel (so a payer on
+   * another device can open it) while the app home is the origin where the
+   * user's session lives. Both are the same place in production.
+   */
+  const closePaymentPage = () => window.location.assign(resolveAppHomeUrl());
 
   return (
     <div className="flex h-full flex-col px-6 py-6 text-white">
@@ -209,56 +269,9 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             </div>
           </div>
 
-          <button
-            onClick={closePaymentPage}
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white/5 hover:bg-white/10 text-sm font-medium text-zinc-300 transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Inicio
-          </button>
+          <BackToHomeButton onClick={closePaymentPage} />
         </>
-      ) : (
-        <>
-          <button
-            onClick={closePaymentPage}
-            className="mb-8 flex items-center gap-2 self-start text-sm font-medium text-zinc-400 hover:text-white"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Inicio
-          </button>
-
-          <div className="flex w-full flex-1 flex-col items-center justify-center">
-            <div className="mb-6 text-center">
-              <img
-                alt="ReWallet"
-                className="mx-auto mb-4 h-12 w-auto select-none"
-                src="/rewallet-lockup.png"
-              />
-              <h1 className="text-2xl font-bold">Solicitud de pago</h1>
-              {intent.message && <p className="mt-2 text-sm text-zinc-400">{intent.message}</p>}
-            </div>
-
-            <div className="mb-5 w-full rounded-2xl border border-white/10 bg-[#161619] p-4">
-              <p className="mb-2 text-xs text-zinc-500">Pagar a</p>
-              <p className="font-mono text-sm text-zinc-200">
-                {recipientIdentity?.email ?? shortenAddress(intent.recipient)}
-              </p>
-              <p className="mt-3 text-xs text-zinc-500">Cadena/Moneda</p>
-              <p className="text-sm font-medium text-white">Solana/{asset?.symbol ?? 'USDC'}</p>
-            </div>
-
-            {intent.amount !== null ? (
-              /* Fixed amount: a centered, highlighted figure instead of an input. */
-              <div className="mb-4 block w-full">
-                <span className="mb-2 block text-xs font-semibold text-zinc-300 text-center">Monto a pagar</span>
-                <div className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-[#161619] py-4">
-                  <span className="text-sm font-semibold text-zinc-400">USD</span>
-                  <span className="text-4xl font-bold text-white tabular-nums">
-                    {intent.amount.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-      ) : linkStatus === 'paid' || linkStatus === 'expired' || linkStatus === 'cancelled' ? (
+      ) : linkSettled ? (
         <>
           <div className="flex w-full flex-1 flex-col items-center justify-center">
             <div className="mb-6 text-center">
@@ -283,19 +296,46 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             </div>
           </div>
 
-          <button
-            onClick={closePaymentPage}
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white/5 hover:bg-white/10 text-sm font-medium text-zinc-300 transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Inicio
-          </button>
+          <BackToHomeButton onClick={closePaymentPage} />
         </>
+      ) : (
+        <>
+          <div className="flex w-full flex-1 flex-col items-center justify-center">
+            <div className="mb-6 text-center">
+              <img
+                alt="ReWallet"
+                className="mx-auto mb-4 h-12 w-auto select-none"
+                src="/rewallet-lockup.png"
+              />
+              <h1 className="text-2xl font-bold">Solicitud de pago</h1>
+              {intent.message && <p className="mt-2 text-sm text-zinc-400">{intent.message}</p>}
+            </div>
+
+            <div className="mb-5 w-full rounded-2xl border border-white/10 bg-[#161619] p-4">
+              <p className="mb-2 text-xs text-zinc-400">Pagar a</p>
+              <p className="font-mono text-sm text-zinc-200">
+                {recipientIdentity?.email ?? shortenAddress(intent.recipient)}
+              </p>
+              <p className="mt-3 text-xs text-zinc-400">Cadena/Moneda</p>
+              <p className="text-sm font-medium text-white">Solana/{asset?.symbol ?? 'USDC'}</p>
+            </div>
+
+            {intent.amount !== null ? (
+              /* Fixed amount: a centered, highlighted figure instead of an input. */
+              <div className="mb-4 block w-full">
+                <span className="mb-2 block text-xs font-semibold text-zinc-300 text-center">Monto a pagar</span>
+                <div className="flex items-center justify-center gap-2 rounded-xl border border-white/10 bg-[#161619] py-4">
+                  <span className="text-sm font-semibold text-zinc-400">USD</span>
+                  <span className="text-4xl font-bold text-white tabular-nums">
+                    {intent.amount.toFixed(2)}
+                  </span>
+                </div>
+              </div>
       ) : (
               <label className="mb-4 block w-full">
                 <span className="mb-2 block text-xs font-semibold text-zinc-300">Monto en USDC</span>
                 <input
-                  className="h-14 w-full rounded-xl border border-white/10 bg-[#161619] px-4 text-right text-2xl font-semibold text-white outline-none focus:border-[#ff5a1f]"
+                  className="h-14 w-full rounded-xl border border-white/10 bg-[#161619] px-4 text-right text-2xl font-semibold text-white  focus:border-[#ff5a1f]"
                   disabled={isPaying || signature !== null}
                   inputMode="decimal"
                   onChange={(event) => {
@@ -304,7 +344,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
                   }}
                   value={amountInput}
                 />
-                <span className="mt-1 block text-[11px] text-zinc-500">El comercio permite elegir el monto.</span>
+                <span className="mt-1 block text-xs text-zinc-400">El comercio permite elegir el monto.</span>
               </label>
             )}
 
@@ -322,21 +362,60 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             )}
             {error && <p role="alert" className="mb-4 text-xs text-red-300">{error}</p>}
 
-            <button
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#ff5a1f] font-semibold text-white transition hover:bg-[#ff713e] disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={
-                isPaying || isLoadingBalance || balance === null || !payerWallet ||
-                isSelfPayment || !isValidAmount || !Number.isFinite(amount) ||
-                amount <= 0 || amount > (balance ?? 0)
-              }
-              onClick={handlePay}
-            >
-              {isPaying && <Loader2 className="h-4 w-4 animate-spin" />}
-              {isPaying ? 'Firmando y enviando…' : `Pagar ${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'} USDC`}
-            </button>
-            <p className="mt-4 text-center text-[11px] leading-5 text-zinc-500">
-              La transferencia se firma con tu wallet Dynamic. También necesitas SOL de {intent.cluster} para la comisión.
-            </p>
+            {payerWallet ? (
+              <>
+                <button
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#ff5a1f] font-semibold text-white transition hover:bg-[#ff713e] disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={
+                    isPaying || isLoadingBalance || balance === null ||
+                    isSelfPayment || !isValidAmount || !Number.isFinite(amount) ||
+                    amount <= 0 || amount > (balance ?? 0) ||
+                    !linkStatusResolved || linkSettled
+                  }
+                  onClick={handlePay}
+                >
+                  {isPaying && <Loader2 className="h-4 w-4 animate-spin" />}
+                  {isPaying ? 'Firmando y enviando…' : `Pagar ${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'} USDC`}
+                </button>
+                <p className="mt-4 text-center text-xs leading-5 text-zinc-400">
+                  La transferencia se firma con tu wallet Dynamic. También necesitas SOL de {intent.cluster} para la comisión.
+                </p>
+              </>
+            ) : (
+              /* No wallet yet: the payer signs in right here. A disabled pay
+                 button with no way forward is a dead end — the request has to
+                 be payable from the link alone. */
+              <div className="w-full">
+                {initStatus !== 'finished' ? (
+                  <p className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Conectando…
+                  </p>
+                ) : isCreatingWallet ? (
+                  <p className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    Preparando tu wallet Solana…
+                  </p>
+                ) : (
+                  <SignInScreen
+                    compact
+                    title="Necesitás una wallet para pagar"
+                    subtitle="Ingresá con tu email y creamos tu wallet Solana en segundos."
+                  />
+                )}
+                {walletError && (
+                  <p role="alert" className="mt-2 text-xs text-red-300">
+                    No pudimos crear tu wallet: {walletError}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* The exit sits at the END of the screen, the same place the
+              "Pago recibido" screen puts it. */}
+          <div className="mt-4 shrink-0">
+            <BackToHomeButton onClick={closePaymentPage} />
           </div>
         </>
       )}
