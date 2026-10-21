@@ -302,5 +302,27 @@ did not match the provider's — my own error, the transport caught it).
 set is abandoned, the sweep releases the idle callers, the sweep stops at the
 first live caller, and the sweep is bounded.
 
+### Progress — 2026-10-21 (work unit 5 — the third review, and the last one)
+
+The second correction batch was reviewed a third time, with the user's
+consent. **This was the last review round of this work unit**: after it, only
+a real blocker moves the code, and the rest is documented rather than chased.
+
+**Result**: 1 corroborated (CRITICAL), 2 WARNING, 4 SUGGESTION.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| R3-001 — `fetchTimeoutMs` was not validated, so a zero or a negative value aborted every fetch and made the resolver report the session service as unavailable forever: a misconfiguration that looked like a total authentication outage | corroborated | The timeout is raised to a floor of 100 ms, and a non-finite value falls back to the default. The fetch is also raced against the timer, so a fetch that ignores the abort signal cannot hold the request open either |
+| R2-001 | WARNING | The sweep cap now says why it is 64: the sweep stops at the first live entry, so it walks one or two entries in practice |
+| R2-002 | WARNING | The "bounded twice over" comment was wrong — the sweep is best-effort and runs after the eviction. It now says that |
+| R2-003 / R2-004 / R3-003 / R3-004 | SUGGESTION / WARNING | One pattern for both warnings: report once per process, and never re-arm. The two modules said it the same way, and the serverless granularity is now documented instead of accidental |
+| R3-002 | WARNING | `pruneExpiredCallers` is no longer part of the public barrel, and its precondition — the map is ordered least-recently-seen first — is documented |
+| R3-005 | SUGGESTION | The sweep stops at the first live entry, so the cost in practice is one iteration, not 64. Now stated in the comment |
+| R3-006 | SUGGESTION | Two new tests: a fetch that ignores the abort signal still loses the race, and a timeout below the floor is raised instead of aborting every fetch |
+
+**After the third round**: `npm test` → **119 tests, 119 pass, 0 fail**,
+`npm run lint` → clean.
+
+
 
 

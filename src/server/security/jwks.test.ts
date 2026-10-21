@@ -173,6 +173,55 @@ test('a hanging key set is abandoned instead of holding the request open', async
   );
 });
 
+test('a fetch that ignores the abort signal still loses the race', async () => {
+  // The abort stops a fetch that honours the signal. The race is what stops
+  // one that does not, so the request cannot hang either way.
+  const stubborn = (() => {
+    let calls = 0;
+    const fetchImpl = (() => {
+      calls += 1;
+      return new Promise<Response>(() => {
+        /* never settles */
+      });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, calls: () => calls };
+  })();
+
+  const resolver = createCachingJwksResolver({
+    url: URL_UNDER_TEST,
+    fetchTimeoutMs: 50,
+    fetchImpl: stubborn.fetchImpl,
+    now: () => 0,
+  });
+
+  const token = await signToken();
+  await assert.rejects(
+    async () => {
+      await resolver(HEADER, TOKEN_INPUT);
+    },
+    (error: unknown) => error instanceof SessionUnavailableError
+  );
+  assert.equal(stubborn.calls(), 1);
+});
+
+test('a timeout below the floor is raised instead of aborting every fetch', async () => {
+  // A zero would abort every fetch before it starts, and the resolver would
+  // report the session service as unavailable forever.
+  const counter = { calls: 0 };
+  const resolver = createCachingJwksResolver({
+    url: URL_UNDER_TEST,
+    fetchTimeoutMs: 0,
+    fetchImpl: okFetch(counter),
+    now: () => 0,
+  });
+
+  const token = await signToken();
+  const key = await resolver(HEADER, TOKEN_INPUT);
+
+  assert.ok(key);
+  assert.equal(counter.calls, 1);
+});
+
 test('a key set with no keys is refused', async () => {
   const resolver = createCachingJwksResolver({
     url: URL_UNDER_TEST,

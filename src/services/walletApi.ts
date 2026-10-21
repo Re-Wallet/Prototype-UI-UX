@@ -48,17 +48,16 @@ let warnedAboutMissingClient = false;
 function sessionToken(): string | null {
   try {
     const token = getDynamicClient().token;
-    if (typeof token === 'string' && token.length > 0) {
-      // The client is there now. A later failure gets its own warning.
-      warnedAboutMissingClient = false;
-      return token;
-    }
-    return null;
+    return typeof token === 'string' && token.length > 0 ? token : null;
   } catch (error) {
     // No Dynamic client yet: no environment id, or the SDK has not been
     // created. The request still goes out — a user-scoped route answers 401
     // and a public route answers normally — but a silent 401 loop is
     // impossible to diagnose, so the failure is reported once.
+    //
+    // Once per process, like the server-side misconfiguration warnings: a
+    // long-lived process says it one time, and a serverless isolate says it
+    // one time per isolate, which is the right granularity there.
     if (!warnedAboutMissingClient) {
       warnedAboutMissingClient = true;
       console.warn(

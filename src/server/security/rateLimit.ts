@@ -57,9 +57,10 @@ export function clientIp(req: Request): string {
 /**
  * How many entries one request may sweep when releasing expired callers.
  *
- * The sweep is bounded on purpose: a request may not pay for the whole
- * table. The table is ordered least-recently-seen first, so the expired
- * callers cluster at the front and the sweep stops at the first live one.
+ * Sixty-four is generous for a table of live callers: the sweep stops at the
+ * first live entry, so in practice it walks one or two entries. The cap is
+ * what keeps a flood of unique callers from turning a request into an O(n)
+ * sweep.
  */
 const MAX_SWEEP_PER_REQUEST = 64;
 
@@ -69,6 +70,11 @@ const MAX_SWEEP_PER_REQUEST = 64;
  * The per-caller filter already drops the expired timestamps of a caller that
  * comes back; this is for the callers that never come back. Without it their
  * timestamps sit in the table for as long as the process lives.
+ *
+ * The map must be ordered least-recently-seen first — which is how
+ * `createRateLimiter` keeps it, by re-inserting every key it touches. The
+ * sweep relies on that order: it stops at the first live entry, because every
+ * entry after it is more recent and therefore also live.
  *
  * @returns how many entries were removed
  */
@@ -102,12 +108,13 @@ export function pruneExpiredCallers(
  * the window are kept, and the limit applies to how many there are. A fixed
  * window would let a caller send twice the limit across a boundary.
  *
- * The table of callers is bounded twice over: expired callers are released as
- * the window passes, and the least recently seen ones are evicted when the
- * table is over its cap. Both are **amortized** — a request sweeps a bounded
- * number of entries and never scans the whole table — so a flood of unique
- * callers cannot turn one request into an O(n) sweep. The table is the
- * attacker's to grow, and the cost of growing it stays bounded.
+ * The table of callers stays bounded: the least recently seen ones are
+ * evicted when the table is over its cap, and the ones whose window has
+ * passed are released as they come up. Both are best-effort and amortized —
+ * a request sweeps a bounded number of entries and never scans the whole
+ * table — so a flood of unique callers cannot turn one request into an O(n)
+ * sweep. The table is the attacker's to grow, and the cost of growing it
+ * stays bounded.
  */
 export function createRateLimiter(options: RateLimitOptions): RequestHandler {
   const { limit, windowMs, maxKeys = 10_000 } = options;

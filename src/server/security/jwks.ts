@@ -67,9 +67,11 @@ export interface JwksResolverOptions {
   /**
    * How long a fetch may take before it is abandoned.
    *
-   * Five seconds, the same bound the baseline resolver used. Without it a
-   * hanging endpoint holds the request open for the platform's default
-   * timeout, which in Node is unbounded.
+   * Five seconds by default, the same bound the baseline resolver used.
+   * Without it a hanging endpoint holds the request open for the platform's
+   * default timeout, which in Node is unbounded. A value below the resolver's
+   * floor is raised to it: a zero would abort every fetch and take
+   * authentication down.
    */
   fetchTimeoutMs?: number;
   /** Injected clock, so the tests do not have to wait. */
@@ -77,6 +79,22 @@ export interface JwksResolverOptions {
   /** Injected fetch, so the tests do not need a network. */
   fetchImpl?: typeof fetch;
 }
+
+/**
+ * The default fetch timeout: five seconds, the same bound the baseline
+ * resolver used.
+ */
+const DEFAULT_FETCH_TIMEOUT_MS = 5 * 1000;
+
+/**
+ * The shortest fetch timeout the resolver accepts.
+ *
+ * A zero or negative timeout would abort every fetch before it starts, and
+ * the resolver would then report the session service as unavailable
+ * forever. A misconfiguration must not look like a total authentication
+ * outage.
+ */
+const MIN_FETCH_TIMEOUT_MS = 100;
 
 /**
  * Build a key resolver that caches the key set and survives a short outage.
@@ -90,8 +108,13 @@ export function createCachingJwksResolver(options: JwksResolverOptions): JWTVeri
     maxAgeMs = 10 * 60 * 1000,
     staleMs = 24 * 60 * 60 * 1000,
     cooldownMs = 30 * 1000,
-    fetchTimeoutMs = 5 * 1000,
   } = options;
+
+  const requestedTimeout = options.fetchTimeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const fetchTimeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.max(MIN_FETCH_TIMEOUT_MS, requestedTimeout)
+    : DEFAULT_FETCH_TIMEOUT_MS;
+
   const clock = options.now ?? Date.now;
   const doFetch = options.fetchImpl ?? fetch;
 
@@ -103,12 +126,22 @@ export function createCachingJwksResolver(options: JwksResolverOptions): JWTVeri
 
   const load = async (): Promise<void> => {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const response = await doFetch(url, {
-        headers: { accept: 'application/json' },
-        signal: controller.signal,
-      });
+      // The abort stops a fetch that honours the signal, and the race stops
+      // one that does not. Either way the request cannot hang.
+      const response = await Promise.race([
+        doFetch(url, {
+          headers: { accept: 'application/json' },
+          signal: controller.signal,
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new Error(`the JWKS endpoint did not answer within ${fetchTimeoutMs}ms`));
+          }, fetchTimeoutMs);
+        }),
+      ]);
       if (!response.ok) {
         throw new Error(`the JWKS endpoint answered ${response.status}`);
       }
@@ -119,7 +152,7 @@ export function createCachingJwksResolver(options: JwksResolverOptions): JWTVeri
       const resolver = createLocalJWKSet({ keys: payload.keys });
       fresh = { resolver, at: clock() };
     } finally {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     }
   };
 

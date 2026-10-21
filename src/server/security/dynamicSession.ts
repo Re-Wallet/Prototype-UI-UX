@@ -44,7 +44,13 @@ const DEFAULT_JWKS_BASE = 'https://app.dynamicauth.com/api/v0/sdk';
 /** The scope a session must carry to be treated as a person. */
 const REQUIRED_SCOPE = 'user:basic';
 
-/** Whether the missing-environment misconfiguration has already been reported. */
+/**
+ * Whether the missing-environment misconfiguration has already been reported.
+ *
+ * Once per process, like the client's missing-client warning: a long-lived
+ * process says it one time, and a serverless isolate says it one time per
+ * isolate, which is the right granularity there.
+ */
 let warnedAboutMissingEnvironment = false;
 
 /** Why a session could not be established. Safe to surface to the client. */
