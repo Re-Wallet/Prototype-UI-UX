@@ -1,0 +1,170 @@
+# Cloudflare deploy readiness — documentation + Phase 0 hardening
+
+**Objective**: document the Cloudflare deployment plan in the README (including the local team workflow), then implement Phase 0 of that plan — server-side session authentication, CORS tightening, rate limiting, and security headers — so the API can be exposed publicly.
+
+**Branch**: `feat/cloudflare-deploy-readiness` (from `main`)
+**Delivery strategy**: `ask-on-risk` — work-unit commits of ~400 authored changed lines; the PR shape is the user's decision at the end.
+**Test runner**: `npm test` (`node --import tsx --test`, 8 files, 37 tests) + `npm run lint` (`tsc --noEmit`)
+
+## Specs
+
+### S1 — Deployment plan documented in the README
+
+The user asked: *"lo colocaras en el readme"*.
+
+The README must gain a deployment section that a teammate can act on without asking questions. It must state the target architecture, the phased plan, the operational runbook, and the known constraints. Every command it shows must be real and match `package.json`.
+
+**Acceptance**
+- README has a top-level deployment section reachable from its table of contents.
+- It names the concrete Cloudflare products used (Workers, Workers Static Assets, Cron Triggers, Workers Logs/Traces, custom domain) and the ones deliberately NOT used, with the reason.
+- It states the verified platform limits that constrain the design (Workers Free 100k req/day + 10 ms CPU; Paid 5 min CPU; Cron 15 min wall time; Static Assets 25 MiB/file; Worker 64 MiB / 1 s startup).
+- It carries the measured numbers from the current codebase (bundle 1.9 MB / 474 KB gzip; ~4.4 MB of PNG in `landing/`; poll = 2 endpoints per tick at 60 s live / 10 s degraded; 23 API routes; 0 authenticated; sweeper = all users at 500 ms spacing every 300 s).
+- It documents the driver decision (`drizzle-orm/neon-http` over Hyperdrive + `pg`) with the reason: one HTTP round trip per query, no per-request connection setup, and no query cache that fails to invalidate on write.
+- It documents the migration rule: Drizzle migrations run from Node in CI against `DATABASE_URL_UNPOOLED`, never from the Worker, and must be backward-compatible (expand/contract) because a code rollback does not revert the schema.
+- It documents the secrets list, the environment split (staging/production, each with its own Neon branch and Dynamic environment), and the go-live checklist (Dynamic allowed origins, webhook re-registration, stable origin).
+- It states that `VITE_PUBLIC_APP_URL` is build-time and that a runtime config endpoint is the Fase 1 replacement.
+
+### S2 — The team can still deploy locally
+
+The user asked: *"dejando tambien las opciones para que el equipo pueda desplegarlo localmente como equipo de trabajo se entiende?"*.
+
+Local development must remain a first-class, documented path — not a casualty of the Cloudflare work. A teammate must be able to run the whole stack on their own machine without touching the production database.
+
+**Acceptance**
+- The README documents the two-process local model (`npm run api` + `npm run dev`) and the Vite `/api` proxy that makes it same-origin.
+- It documents the tunnel-based preview for testing the payer flow from a second device, and states that the tunnel hostname changes on restart.
+- It documents the per-teammate setup: own `.env.local` with their own Neon branch and their own Dynamic environment id, `npm run db:migrate` against that branch, and the `SWEEPER_DISABLED=1` escape hatch.
+- It documents the "no public deployment without Phase 0" rule so nobody publishes the unprotected API by accident.
+- It names the `audit:*` scripts as the team's end-to-end verification against a running local server.
+
+### S3 — Phase 0: server-side session authentication
+
+The user asked: *"una vez dejemos documentado en el readme comenzamos con la fase 0 eso tenemos que terminarlo cuanto antes"*.
+
+Every API route that reads or writes a user's data must require a validated session, and the session — not a client-supplied parameter — must decide whose data is touched.
+
+**Design constraints (verified against the installed SDK, `@dynamic-labs-sdk/client` v1.41)**
+- The browser session credential is `client.token` (a getter over `state.token`). `useUser()` does NOT expose it.
+- The credential is an RS256 JWT whose claims include `sub` (Dynamic user id), `sid`, `iss`, `aud`, `exp`, `environmentId`, `email`, `scope`, `blockchainAccounts[]` (`{address, chain}`) and `verifiedCredentials[]` (`{id, address, chain}`).
+- Server validation is local RS256 verification against `https://app.dynamicauth.com/api/v0/sdk/{environmentId}/.well-known/jwks`. The scope claim must contain `user:basic` (whitespace-separated membership, not equality).
+- The `users` table has no Dynamic column, so identity is resolved through the session's Solana address → `users.publicKey` → `users.id`. **No schema change and no migration.**
+
+**Acceptance**
+- A request without a session credential to a user-scoped route gets `401` and a JSON error body; it must not reach the database.
+- A request with a valid session whose Solana address set does not contain the requested wallet gets `403`; it must not reach the database.
+- A request with a valid session for wallet W may read and write W's data, and the user id is resolved from the session's own address, never from a client-supplied parameter alone.
+- An expired, malformed, wrongly-signed, wrongly-issued, or wrong-environment token is rejected; the JWKS lookup is cached and refreshes when a signing key rotates.
+- The public routes used by the payer flow (`/api/payment-links/by-reference/:reference`, `/api/payment-links/by-slug/:slug`, `/api/payment-links/claim`, `/api/landing/survey`) keep working without a session.
+- The Dynamic webhook keeps working and is not affected by the session requirement.
+- The verification is unit-tested with a locally generated RSA keypair and a locally signed token — no network, no database, no live Dynamic environment.
+
+### S4 — Phase 0: CORS without a wildcard
+
+`Access-Control-Allow-Origin: *` currently makes every other defect remotely exploitable from any page.
+
+**Acceptance**
+- No response carries a wildcard origin. The allowed origin list is explicit and comes from configuration.
+- The `Authorization` header is allowed in preflight.
+- A preflight from a disallowed origin is refused.
+- The local Vite proxy and the documented tunnel origins keep working.
+
+### S5 — Phase 0: rate limiting
+
+`/api/payment-links/claim` performs up to 7 paced Solana RPC reads per call, so an unauthenticated caller can exhaust the shared RPC quota and make real users' balance reads fail with 429.
+
+**Acceptance**
+- A configurable limiter applies to the expensive and write routes.
+- Exceeding the limit returns `429` with a JSON error body and a `Retry-After` header.
+- The Dynamic webhook is exempt (it has its own signature verification and its own retry budget).
+- The limiter is documented as per-isolate and therefore approximate, with the Cloudflare WAF rate-limiting rule named as the authoritative edge limit.
+
+### S6 — Phase 0: security headers
+
+Express sets no security headers. A wallet UI that requests transaction signatures must not be frameable.
+
+**Acceptance**
+- Responses carry `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and `Strict-Transport-Security`.
+- The CSP does not break the app: the Dynamic iframe, the Neon Realtime WebSocket endpoint, and the Solana RPC endpoint are explicitly allowed.
+
+### S7 — The public identity endpoint stops leaking e-mail
+
+`GET /api/wallet/identity` returns `{email, handle}` for any address. The payer page needs the merchant's display name, not their e-mail address.
+
+**Acceptance**
+- The endpoint returns the display name and no account e-mail.
+- The payer flow still renders the merchant identity.
+
+### S8 — Verification
+
+**Acceptance**
+- `npm run lint` (`tsc --noEmit`) passes.
+- `npm test` passes, including the new Phase 0 tests.
+- The new tests fail against the pre-change behaviour (RED) and pass after (GREEN), and that RED→GREEN evidence is recorded in this document.
+- The `express.json` `verify` callback that preserves the raw body for the webhook HMAC is untouched; the webhook signature check still passes its existing test coverage.
+
+## Tasks
+
+| ID | Task | Specs | Route | Status | Commit |
+|----|------|-------|-------|--------|--------|
+| T1 | Document the deployment plan and the local team workflow in the README | S1, S2 | inline | done | (this commit) |
+| T2 | Extract the Express app so it can be tested; export `app`, guard `listen` | S3 | inline | pending | — |
+| T3 | Session verification module (JWKS + RS256 + claims) with dependency injection | S3 | inline | pending | — |
+| T4 | Session middleware: extract credential, resolve the user's Solana addresses, resolve `userId` | S3 | inline | pending | — |
+| T5 | Apply the session requirement to every user-scoped route | S3, S7 | inline | pending | — |
+| T6 | Client sends the session credential; identity endpoint stops leaking e-mail | S3, S7 | inline | pending | — |
+| T7 | CORS allowlist, rate limiter, security headers | S4, S5, S6 | inline | pending | — |
+| T8 | Tests: RED→GREEN for the session gate, CORS, rate limit, headers | S3, S4, S5, S6, S7, S8 | inline | pending | — |
+| T9 | Full suite + typecheck; work-unit commits; native review assessment | S8 | inline | pending | — |
+
+**Route note**: every task runs inline. No Writer trigger fires (no parallelism: one unit of behaviour; no context backstop: the parent already holds the full map from the exploration phase). The 4-file rule was satisfied by two read-only explorer delegations before this document was written.
+
+## Log
+
+### L1 — 2026-10-21
+> "estamos listo para desplegar este sistema en cloduflare?"
+
+### L2 — 2026-10-21
+> "este despliegue es para una wallet en devnet para ir a buscar los primerosusuarios lo que busco seguridad, rapidez y eficiencia antes de ejecutar codigo, analiza bien como se desplegaria esto respecto a casos de usos reales y enginners en dev ops"
+
+### L3 — 2026-10-21
+> "lo colocaras en el readme y posterior a ello preparemos para desplegar, pero dejando tambien las opciones para que el equipo pueda desplegarlo localmente como equipo de trabajo se entiende? una vez dejemos documentado en el readme comenzamos con la fase 0 eso tenemos que temrinarlo cuanto antes ... utilizaremos odd para aplicar eso lo necesito sin cometer errores, siendo un senior enginner software con conocimientos en web3 seguridad devops y producto + funcionamiento ... lo podemos lograr vamos por ello!"
+
+### Analysis — deployment assessment (2026-10-21)
+
+**Verdict**: the application is eligible for Cloudflare; the blocker is not the platform. The API has zero authentication, so it cannot be exposed publicly on ANY host until Phase 0 lands.
+
+**Evidence gathered**
+- `npm run lint` clean, `vite build` succeeds, `npm test` = 37/37 pass.
+- 23 routes in `server.ts`; `app` is not exported and `app.listen` runs at module scope (`server.ts:903`), so the app cannot be imported by a test today.
+- Every user-scoped route resolves the caller from a client-supplied `wallet` query/body field via `getUserIdByPubkey` / `getUserByPubkey`. No ownership proof anywhere except `POST /api/wallet/transactions/pending` (signature ownership, `server.ts:361`).
+- CORS is `Access-Control-Allow-Origin: *` (`server.ts:119-124`); Express sets no security headers.
+- `POST /api/payment-links/claim` (`server.ts:702`) performs up to 7 paced Solana RPC reads — the amplification vector.
+- `GET /api/wallet/identity` (`server.ts:613`) returns the account e-mail with no ownership check.
+- `POST /api/payment-links` (`server.ts:472`) accepts the recipient wallet from the body → impersonation vector.
+- The Dynamic webhook (`server.ts:144`) fails closed when `DYNAMIC_WEBHOOK_SECRET` is unset, and its HMAC depends on the `express.json` `verify` callback preserving `req.rawBody` (`server.ts:108-115`).
+- No key custody on the server: `src/adapters/token.ts` derives an ATA (a PDA), it does not sign. `better-sqlite3` appears only in `src/scripts/migrateTransactionsFromSqlite.ts`, never in the request path.
+- Neon Realtime is browser-direct: the server only seals a short-lived capability (`src/services/realtimeServer.ts`), so no server-side WebSocket is required.
+- No `users` row is created anywhere in this repository; registration lives outside it. This is why Phase 0 resolves identity through the session's Solana address instead of adding a `dynamicUserId` column.
+
+**Platform constraints that shape the plan (verified against Cloudflare docs, 2026-10)**
+- Workers Free: 100k requests/day, 10 ms CPU/request, 50 subrequests, 6 simultaneous open connections. Paid: $5/month base, 5 min CPU (30 s default).
+- Cron Trigger: 15 min wall time; 30 s CPU when the interval is under one hour, 15 min when it is one hour or more.
+- Static Assets: 25 MiB per file, 100k files. Worker: 64 MiB, 1 s startup.
+- Request math for this app: the poll is 2 endpoints per tick → 120 req/h/user with Realtime healthy, 720 req/h/user degraded. Free tier ≈ 833 user-hours/day healthy, ≈139 degraded. If Realtime breaks with 15+ concurrent users, the account hits Error 1027.
+- Sweeper math: `syncAllWallets(500)` scans every user with 500 ms spacing every 300 s → ~50 s + RPC at 100 users, ~8–12 min at 1000 users. It does not fit a Cron Trigger at scale and needs a batch cursor.
+
+**Decisions taken**
+1. Target runtime: Cloudflare Workers + Workers Static Assets, Neon over HTTP (`drizzle-orm/neon-http`), Cron Trigger for the sweeper, custom domain for a stable origin. Not Containers: the app is already effectively stateless and the only stateful piece is a job.
+2. Driver: `neon-http` over Hyperdrive + `pg`. Hyperdrive requires creating the client inside the handler (the current module-level `new Pool()` in `src/db/index.ts` would have to move), and its query cache does not invalidate on write — unacceptable for a live ledger.
+3. Phase 0 identity: validate the Dynamic JWT locally against JWKS, then resolve the user through the session's Solana address. No schema change, no migration, no dependency on the external registration path.
+4. JWT verification uses `jose` rather than hand-rolled crypto. A hand-rolled RS256 verifier is exactly the kind of code that produces CVEs.
+5. Phase 0 keeps the payer flow public. A payer may not be signed in; `/api/payment-links/by-*` and `/api/payment-links/claim` stay open and are protected by the on-chain verification, not by a session.
+
+**Explicit non-goals for this work unit**: the Workers port itself (Fase 1), the Cron/sweeper cursor, `wrangler.toml`, CI, the custom domain, and the actual deployment. Those are documented in the README and planned, not implemented, in this change.
+
+### Progress — 2026-10-21
+
+- **T1 done.** The README gained a `## Deployment` section (+287 lines) between `## Scripts` and `## Known limitations`. It covers: why the target is a Worker (the table of the serverless-hostile things this app does *not* have), the target shape diagram, the Cloudflare products used and the ones deliberately not used, the phase plan with Phase 0 marked in progress, the Phase 0 threat model, the local team workflow (per-teammate Neon branch, Dynamic environment, sweeper off, tunnel, the `audit:*` scripts), the Cloudflare runbook (environments, secrets, driver decision, migrations in CI, observability, rollout, go-live checklist), the platform limits with this repository's measurements, and the operational runbook. `## Roadmap to beta` gained item 9 pointing at it.
+- The API table in the README still describes the pre-Phase-0 surface. It is updated with the Phase 0 commit, not this one, so the documentation never claims a protection that is not in the tree yet.
+- **Engram mirror pending.** `mem_save` for this document failed twice with "could not confirm Engram session registration". The Engram server itself is healthy (`mem_doctor` reports 9/10 checks ok; the single error is an unrelated `sync_target_closed_space` finding for other projects). The file is the source of truth; the mirror is retried in the next work unit.
+
