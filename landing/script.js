@@ -11,9 +11,10 @@ const IS_LOCAL =
   window.location.hostname === "localhost" ||
   window.location.hostname === "127.0.0.1";
 /* La URL de la app sale del <meta name="re-wallet-app-url"> del HTML: es el
-   único punto que hay que tocar al desplegar la landing. El placeholder
-   cuenta como "sin configurar", y en ese caso el botón de demo se
-   deshabilita en vez de llevar a una URL rota. */
+   único punto que hay que tocar cuando la landing se despliega en un host
+   propio. Sin configurarla cae en el origen que sirve la página, que es lo
+   correcto cuando la landing y la app se sirven juntas (el build copia
+   landing/ dentro de dist/). */
 const CONFIGURED_APP_URL = (
   document.querySelector('meta[name="re-wallet-app-url"]')?.content ?? ""
 ).trim();
@@ -21,7 +22,7 @@ const APP_URL = IS_LOCAL
   ? "http://127.0.0.1:3000"
   : CONFIGURED_APP_URL && !CONFIGURED_APP_URL.startsWith("TU-")
     ? CONFIGURED_APP_URL
-    : "";
+    : window.location.origin;
 /* API — en dev es el server Express (:3001); en prod, el mismo worker. */
 const API_URL = IS_LOCAL ? "http://127.0.0.1:3001" : APP_URL || window.location.origin;
 
@@ -55,15 +56,9 @@ const metricsReady = fetch(`${API_URL}/api/landing/metrics`)
 const demoBtn = document.querySelector(".demo-btn");
 
 /* DEMO DEVNET - navega a la app (worker en prod, Vite en dev local) */
-if (APP_URL) {
-  demoBtn.addEventListener("click", () => {
-    window.location.href = APP_URL;
-  });
-} else {
-  demoBtn.disabled = true;
-  demoBtn.title = "Configurá la URL de la app en el meta re-wallet-app-url";
-  demoBtn.classList.add("is-disabled");
-}
+demoBtn.addEventListener("click", () => {
+  window.location.href = APP_URL;
+});
 
 /* HEADLINE ROTATOR — "cualquier persona" ↔ "cualquier negocio" */
 const headlineRotate = document.getElementById("headlineRotate");
