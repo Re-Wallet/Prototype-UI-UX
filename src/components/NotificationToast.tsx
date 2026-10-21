@@ -32,7 +32,7 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({ toast, onD
             <h4 className="text-xs font-bold text-white leading-tight truncate">
               {toast.title}
             </h4>
-            <p className="text-[11px] text-zinc-300 leading-tight truncate">
+            <p className="text-xs text-zinc-300 leading-tight truncate">
               {toast.message}
             </p>
           </div>
@@ -47,6 +47,7 @@ export const NotificationToast: React.FC<NotificationToastProps> = ({ toast, onD
 
         <button
           onClick={onDismiss}
+          aria-label="Cerrar notificación"
           className="p-1 text-zinc-400 hover:text-white transition-colors shrink-0 cursor-pointer"
         >
           <X className="w-3.5 h-3.5" />

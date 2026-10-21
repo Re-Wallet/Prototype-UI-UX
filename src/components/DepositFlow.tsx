@@ -67,7 +67,7 @@ export const DepositFlow: React.FC<DepositFlowProps> = ({
           <ArrowLeft className="w-5 h-5" />
           <span>Volver</span>
         </button>
-        <h1 className="text-[17px] font-semibold text-white tracking-tight">Depósito USDC</h1>
+        <h1 className="text-lg font-semibold text-white tracking-tight">Depósito USDC</h1>
         <div className="w-12" />
       </div>
 
@@ -89,15 +89,15 @@ export const DepositFlow: React.FC<DepositFlowProps> = ({
               {qrError ? 'No se pudo generar el QR' : <Loader2 className="h-6 w-6 animate-spin" />}
             </div>
           )}
-          <p className="text-[11px] font-medium text-black/70 mt-2 text-center">
+          <p className="text-xs font-medium text-black/70 mt-2 text-center">
             Este QR contiene la dirección de tu wallet Solana
           </p>
-          {qrError && <p role="alert" className="mt-2 text-center text-[11px] text-red-600">{qrError}</p>}
+          {qrError && <p role="alert" className="mt-2 text-center text-xs text-red-600">{qrError}</p>}
         </div>
 
         <div className="mt-3 p-3 rounded-xl bg-[#1e1e21] border border-white/5 flex items-center justify-between">
           <div className="min-w-0 pr-2">
-            <span className="text-[10px] text-zinc-500 block uppercase tracking-wider font-semibold">
+            <span className="text-[10px] text-zinc-400 block uppercase tracking-wider font-semibold">
               Wallet · {chain.describeNetwork()}
             </span>
             <p className="text-xs font-mono text-zinc-200 break-all">
@@ -109,6 +109,7 @@ export const DepositFlow: React.FC<DepositFlowProps> = ({
             disabled={!solanaAddress}
             className="p-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-white shrink-0 active:scale-95 transition-all cursor-pointer disabled:opacity-40"
             title="Copiar dirección"
+                    aria-label="Copiar dirección"
           >
             {copied ? <Check className="w-4 h-4 text-[#26e5c8]" /> : <Copy className="w-4 h-4" />}
           </button>

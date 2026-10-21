@@ -1,5 +1,6 @@
 import React from 'react';
-import { ArrowLeft, ArrowDownLeft, ArrowUpRight, AlertTriangle, CheckCheck } from 'lucide-react';
+import { ArrowLeft, CheckCheck } from 'lucide-react';
+import { MovementIcon } from './movementVisuals';
 import type { WalletNotification } from '../services/walletApi';
 import { Translations } from '../i18n/translations';
 
@@ -28,28 +29,15 @@ function relativeTime(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }
 
+/**
+ * The icon for a notification.
+ *
+ * It comes from the shared movement vocabulary, so the same event carries
+ * the same icon and colours in the notification feed, in "Recientes" and in
+ * the history modal.
+ */
 function iconFor(type: string) {
-  if (type === 'transfer_failed') {
-    return (
-      <div className="w-10 h-10 rounded-full bg-[#ef4444]/15 border border-[#ef4444]/25 flex items-center justify-center text-[#ef4444]">
-        <AlertTriangle className="w-4.5 h-4.5" />
-      </div>
-    );
-  }
-  // Outgoing: in-app transfer and external withdrawal share the up-right arrow.
-  if (type === 'transfer_sent' || type === 'withdrawal_sent') {
-    return (
-      <div className="w-10 h-10 rounded-full bg-[#ff5a1f]/12 border border-[#ff5a1f]/25 flex items-center justify-center text-[#ff5a1f]">
-        <ArrowUpRight className="w-5 h-5 stroke-[2.2]" />
-      </div>
-    );
-  }
-  // Incoming: in-app transfer and external deposit share the down-left arrow.
-  return (
-    <div className="w-10 h-10 rounded-full bg-[#10b981]/12 border border-[#10b981]/25 flex items-center justify-center text-[#10b981]">
-      <ArrowDownLeft className="w-5 h-5 stroke-[2.2]" />
-    </div>
-  );
+  return <MovementIcon type={type} />;
 }
 
 export const NotificationsView: React.FC<NotificationsViewProps> = ({
@@ -72,13 +60,13 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
           <ArrowLeft className="w-5 h-5" />
           <span>{t.back}</span>
         </button>
-        <h1 className="text-[17px] font-semibold text-white tracking-tight">
+        <h1 className="text-lg font-semibold text-white tracking-tight">
           {t.notificationsTitle}
         </h1>
         {unread > 0 ? (
           <button
             onClick={onMarkAllRead}
-            className="flex items-center gap-1 text-[11px] font-semibold text-[#ff5a1f] hover:text-[#ff6c35] transition-colors py-2 cursor-pointer"
+            className="flex items-center gap-1 text-xs font-semibold text-[#ff5a1f] hover:text-[#ff6c35] transition-colors py-2 cursor-pointer"
           >
             <CheckCheck className="w-3.5 h-3.5" />
             <span>{t.markAllRead}</span>
@@ -91,7 +79,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
       {/* List */}
       <div className="flex-1 overflow-y-auto divide-y divide-white/[0.04] pr-1">
         {items.length === 0 ? (
-          <div className="py-16 text-center text-zinc-500 text-xs">
+          <div className="py-16 text-center text-zinc-400 text-xs">
             {loading ? t.loadingNotifications : t.noNotifications}
           </div>
         ) : (
@@ -105,25 +93,22 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
               >
                 <div className="relative shrink-0">
                   {iconFor(item.type)}
-                  {!item.isRead && (
-                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-[#ff5a1f] border-2 border-[#0b0b0d]" />
-                  )}
                 </div>
 
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline justify-between gap-2">
                     <p
-                      className={`text-[14px] leading-snug truncate ${
+                      className={`text-sm leading-snug truncate ${
                         item.isRead ? 'font-medium text-zinc-300' : 'font-semibold text-white'
                       }`}
                     >
                       {item.title}
                     </p>
-                    <span className="text-[11px] text-zinc-500 shrink-0">
+                    <span className="text-xs text-zinc-400 shrink-0">
                       {relativeTime(item.createdAt)}
                     </span>
                   </div>
-                  <p className="text-[12px] text-zinc-400 leading-snug">{item.message}</p>
+                  <p className="text-xs text-zinc-400 leading-snug">{item.message}</p>
                 </div>
               </button>
             );

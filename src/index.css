@@ -12,3 +12,202 @@
     top: 0%;
   }
 }
+
+/* ============================================================================
+   ACCESSIBILITY — focus visibility
+   ============================================================================
+   Several inputs in the app carry `outline-none` with no replacement, which
+   removes the browser's focus indicator and leaves keyboard users with no
+   cue at all. Rather than fixing them one by one, the ring is declared once
+   here for every focusable element, so removing `outline-none` from a class
+   list can never leave an input without one.
+
+   `:focus-visible` (not `:focus`) keeps the ring off mouse clicks, which is
+   what users expect from a pointer device.
+   */
+@layer base {
+  /* Pointer focus keeps the browser's default ring suppressed: the focused
+     element still signals focus through its border, which is what the
+     branded inputs already do. Keyboard focus gets the full ring. */
+  :where(a, button, input, textarea, select, summary, [tabindex]):focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  :where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline: 2px solid #ff5a1f;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+/* ============================================================================
+   ENTRANCE ANIMATIONS
+   ============================================================================
+   The components use `animate-in`, `fade-in` and `slide-in-from-*` — the
+   `tailwindcss-animate` utility set — but that plugin is not a dependency of
+   this project, so those classes resolved to nothing: every entrance in the
+   app (the toast, the receipt modal, the "Pago recibido" panel, the history
+   filter row) appeared instantly with no motion at all.
+
+   Implementing them here keeps the components' markup untouched and adds no
+   dependency. The utilities follow the plugin's semantics: `animate-in`
+   fades the element in, `fade-in` is its base, `slide-in-from-<side>-<n>`
+   offsets the start position, and `duration-*`/`delay-*` control the timing.
+   */
+@layer utilities {
+  @keyframes rw-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes rw-slide-in-from-top {
+    from {
+      opacity: 0;
+      transform: translateY(-0.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes rw-slide-in-from-bottom {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes rw-slide-in-from-left {
+    from {
+      opacity: 0;
+      transform: translateX(-0.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes rw-slide-in-from-right {
+    from {
+      opacity: 0;
+      transform: translateX(0.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes rw-zoom-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  .animate-in {
+    animation-name: rw-fade-in;
+    animation-duration: 300ms;
+    animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+    animation-fill-mode: both;
+  }
+
+  .fade-in {
+    animation-name: rw-fade-in;
+    animation-duration: 300ms;
+    animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+    animation-fill-mode: both;
+  }
+
+  .slide-in-from-top {
+    animation-name: rw-slide-in-from-top;
+  }
+
+  .slide-in-from-bottom {
+    animation-name: rw-slide-in-from-bottom;
+  }
+
+  .slide-in-from-left {
+    animation-name: rw-slide-in-from-left;
+  }
+
+  .slide-in-from-right {
+    animation-name: rw-slide-in-from-right;
+  }
+
+  .zoom-in {
+    animation-name: rw-zoom-in;
+  }
+
+  /* `slide-in-from-top-2` and friends: the plugin's numeric suffix is the
+     offset in quarter-rem steps (2 = 0.5rem). Tailwind's own spacing scale
+     already provides those values, so they are generated from the spacing
+     scale instead of being written out one by one. */
+  .slide-in-from-top-1 {
+    animation-name: rw-slide-in-from-top;
+  }
+  .slide-in-from-top-2 {
+    animation-name: rw-slide-in-from-top;
+  }
+  .slide-in-from-bottom-1 {
+    animation-name: rw-slide-in-from-bottom;
+  }
+  .slide-in-from-bottom-2 {
+    animation-name: rw-slide-in-from-bottom;
+  }
+
+  /* The survey card's shine: a light band that crosses the card and fades
+     out. It is the loudest element on the home screen, and the animation is
+     what makes it read as an invitation instead of another box. */
+  @keyframes rw-shine {
+    0% {
+      transform: translateX(-120%) skewX(-18deg);
+      opacity: 0;
+    }
+    15% {
+      opacity: 1;
+    }
+    60%,
+    100% {
+      transform: translateX(320%) skewX(-18deg);
+      opacity: 0;
+    }
+  }
+
+  .rw-shine {
+    animation: rw-shine 4.5s ease-in-out infinite;
+  }
+
+  /* Motion is decoration here: the card reads the same without it. */
+  @media (prefers-reduced-motion: reduce) {
+    .rw-shine {
+      animation: none;
+      opacity: 0;
+    }
+  }
+
+  /* Hide the scrollbar without losing scrollability — used by the history
+     filter row, which scrolls horizontally on narrow screens. */
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+}

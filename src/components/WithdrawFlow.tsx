@@ -7,7 +7,11 @@ import { CoinIcon } from './CoinIcon';
 import { QrScannerFlow } from './QrScannerFlow';
 import { getDynamicClient } from '../dynamicClient';
 import { assetBySymbol, chain, type Address } from '../adapters';
-import { fetchRecentRecipients, type RecentRecipient } from '../services/walletApi';
+import {
+  fetchRecentRecipients,
+  peekRecentRecipients,
+  type RecentRecipient,
+} from '../services/walletApi';
 import type { Transaction } from '../types/wallet';
 import type { Translations } from '../i18n/translations';
 
@@ -51,6 +55,10 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
   useEffect(() => {
     if (step !== 'details' || !solanaWallet) return;
     let cancelled = false;
+    // Paint the last known list synchronously so the contacts never flash
+    // empty when this step opens, then let the refresh land.
+    const cached = peekRecentRecipients(solanaWallet.address);
+    if (cached) setRecentRecipients(cached);
     void fetchRecentRecipients(solanaWallet.address).then((entries) => {
       if (!cancelled) setRecentRecipients(entries);
     });
@@ -228,7 +236,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
               <ArrowLeft className="w-5 h-5" />
               <span>Volver</span>
             </button>
-            <h1 className="text-[17px] font-semibold text-white tracking-tight">Confirmar envío</h1>
+            <h1 className="text-lg font-semibold text-white tracking-tight">Confirmar envío</h1>
             <div className="w-12" />
           </div>
 
@@ -238,7 +246,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
               <CoinIcon className="w-6 h-6 text-zinc-300" />
               <span className="text-3xl font-bold text-white tabular-nums">{amount.toFixed(2)}</span>
             </div>
-            <span className="text-xs text-zinc-500 font-medium">USDC · {chain.describeNetwork()}</span>
+            <span className="text-xs text-zinc-400 font-medium">USDC · {chain.describeNetwork()}</span>
           </div>
 
           <label className="text-xs font-medium text-zinc-400 block mb-1.5" htmlFor="withdraw-recipient">
@@ -249,10 +257,13 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
               id="withdraw-recipient"
               type="text"
               autoComplete="off"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={recipientAddress}
               onChange={(event) => setRecipientAddress(event.target.value.trim())}
               placeholder="Pega o escanea una dirección Solana"
-              className="w-full min-h-12 pl-3.5 pr-20 rounded-xl bg-[#1e1e21] border border-white/10 text-white text-xs font-mono focus:outline-none focus:border-[#ff5a1f]"
+              className="w-full min-h-12 pl-3.5 pr-20 rounded-xl bg-[#1e1e21] border border-white/10 text-white text-xs font-mono focus:border-[#ff5a1f]"
             />
             <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-0.5">
               <button
@@ -275,7 +286,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
               </button>
             </div>
           </div>
-          <p className="mt-2 text-[11px] text-zinc-500">
+          <p className="mt-2 text-xs text-zinc-400">
             La wallet Dynamic firmará un envío de USDC en {chain.describeNetwork()}. Revisa cuidadosamente la dirección.
           </p>
           {sendError && <p role="alert" className="mt-3 text-xs text-red-400">{sendError}</p>}
@@ -283,13 +294,13 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
           {recentRecipients.length > 0 && (
             <div className="mt-5">
               <div className="w-full h-11 rounded-xl bg-[#1e1e21] border border-white/10 flex items-center px-3.5 mb-2">
-                <Search className="w-4 h-4 text-zinc-500 mr-2.5 shrink-0" />
+                <Search className="w-4 h-4 text-zinc-400 mr-2.5 shrink-0" />
                 <input
                   type="text"
                   placeholder="Buscar en recientes"
                   value={recipientQuery}
                   onChange={(event) => setRecipientQuery(event.target.value)}
-                  className="w-full bg-transparent text-white text-xs placeholder:text-zinc-500 outline-none"
+                  className="w-full bg-transparent text-white text-xs placeholder:text-zinc-400 "
                 />
               </div>
               <p className="text-xs font-semibold text-zinc-300 mb-1">Recientes</p>
@@ -302,10 +313,10 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
                     className="w-full flex items-center justify-between py-3 px-1 hover:bg-white/[0.02] active:bg-white/[0.05] rounded-xl transition-colors text-left cursor-pointer"
                   >
                     <span className="min-w-0 pr-2">
-                      <span className="block text-[13px] font-medium text-white truncate">
+                      <span className="block text-sm font-medium text-white truncate">
                         {entry.email ?? entry.name}
                       </span>
-                      <span className="block text-[11px] font-mono text-zinc-500 truncate">
+                      <span className="block text-xs font-mono text-zinc-400 truncate">
                         {entry.address}
                       </span>
                     </span>
@@ -315,7 +326,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
                   </button>
                 ))}
                 {filteredRecipients.length === 0 && (
-                  <p className="py-3 text-[11px] text-zinc-500">Sin resultados.</p>
+                  <p className="py-3 text-xs text-zinc-400">Sin resultados.</p>
                 )}
               </div>
             </div>
@@ -326,7 +337,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
           <button
             onClick={handleSend}
             disabled={isSending || balanceLoading || Boolean(balanceError) || !solanaWallet || amount <= 0 || isOverBalance}
-            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] disabled:bg-zinc-800 disabled:text-zinc-500 active:scale-[0.98] text-white font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer disabled:cursor-not-allowed transition-all"
+            className="w-full h-13 rounded-2xl bg-[#ff5a1f] hover:bg-[#ff6c35] disabled:bg-zinc-800 disabled:text-zinc-400 active:scale-[0.98] text-white font-semibold text-base flex items-center justify-center gap-2 shadow-lg shadow-[#ff5a1f]/20 cursor-pointer disabled:cursor-not-allowed transition-all"
           >
             {isSending ? (
               <>
@@ -369,7 +380,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
       <div className="w-full pb-2">
         <button
           onClick={onClose}
-          className="w-full h-13 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-[15px] transition-all cursor-pointer"
+          className="w-full h-13 rounded-2xl bg-white hover:bg-zinc-200 text-black font-semibold text-base transition-all cursor-pointer"
         >
           Volver a la billetera
         </button>

@@ -35,6 +35,15 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  /**
+   * Whether the component is still mounted.
+   *
+   * `getUserMedia` resolves asynchronously: if the user closes the scanner
+   * while the permission prompt is open, the stream arrives after unmount.
+   * Without this flag the camera would stay on with nothing to show it.
+   */
+  const mountedRef = useRef(true);
+
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
@@ -54,6 +63,13 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({
         video: { facingMode: { ideal: 'environment' } },
         audio: false,
       });
+
+      // The user may have closed the scanner while the permission prompt was
+      // open. Release the camera instead of leaving it on for nobody.
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
 
       streamRef.current = stream;
       setState('scanning');
@@ -175,7 +191,11 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({
   }, [state, startBarcodeScanning, stopBarcodeScanning]);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      // Flip the flag first: a `getUserMedia` still in flight will see it and
+      // release its own stream instead of leaking it.
+      mountedRef.current = false;
       stopCamera();
       stopBarcodeScanning();
     };
@@ -220,7 +240,7 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({
           <ArrowLeft className="w-5 h-5" />
           <span>{t.back}</span>
         </button>
-        <h1 className="text-[17px] font-semibold text-white tracking-tight">{t.qrScannerTitle}</h1>
+        <h1 className="text-lg font-semibold text-white tracking-tight">{t.qrScannerTitle}</h1>
         <div className="w-12" />
       </div>
 
@@ -261,7 +281,7 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({
                 ? 'Escanea el QR con la dirección del receptor.'
                 : t.qrScannerHint}
             </p>
-            <p className="text-xs text-zinc-500 mb-5">
+            <p className="text-xs text-zinc-400 mb-5">
               {mode === 'address'
                 ? 'También funciona un QR de pago Solana Pay: se usa solo la dirección.'
                 : 'Compatible con códigos Solana Pay y links de cobro ReWallet.'}
@@ -378,7 +398,7 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({
               <X className="w-7 h-7 text-red-400" />
             </div>
             <p className="text-sm text-white mb-1">{t.qrScannerDenied}</p>
-            <p className="text-xs text-zinc-500 mb-5">
+            <p className="text-xs text-zinc-400 mb-5">
               Habilita el permiso de cámara en tu navegador e inténtalo de nuevo.
             </p>
             <button
@@ -394,14 +414,14 @@ export const QrScannerFlow: React.FC<QrScannerFlowProps> = ({
         {state === 'unsupported' && (
           <div className="text-center px-6">
             <p className="text-sm text-white mb-1">{t.qrScannerUnsupported}</p>
-            <p className="text-xs text-zinc-500">
+            <p className="text-xs text-zinc-400">
               Este dispositivo o navegador no expone acceso a la cámara.
             </p>
           </div>
         )}
       </div>
 
-      <p className="text-[11px] text-zinc-500 text-center mt-4">
+      <p className="text-xs text-zinc-400 text-center mt-4">
         {t.qrScannerPrivacy}
       </p>
     </div>

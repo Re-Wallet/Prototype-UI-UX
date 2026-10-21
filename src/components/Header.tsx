@@ -20,14 +20,14 @@ export const Header: React.FC<HeaderProps> = ({
       {/* Left: User Avatar & Handle → opens the profile screen */}
       <button
         onClick={onOpenProfile}
-        className="flex items-center gap-2.5 min-h-[44px] group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#ff5a1f] rounded-full pr-2 cursor-pointer"
+        className="flex items-center gap-2.5 min-h-[44px] group focus-visible:ring-2 focus-visible:ring-[#ff5a1f] rounded-full pr-2 cursor-pointer"
         aria-label="Abrir perfil de usuario"
       >
         <div className="relative w-8 h-8 rounded-full bg-[#ff1f71] flex items-center justify-center shadow-sm transition-transform group-hover:scale-105">
           <span className="text-white text-xs font-bold select-none">◡̈</span>
           <span className="absolute bottom-0 right-0 w-2 h-2 rounded-full bg-[#26e5c8] border border-black" />
         </div>
-        <span className="text-[15px] font-semibold tracking-tight text-white/95 group-hover:text-white transition-colors">
+        <span className="text-base font-semibold tracking-tight text-white/95 group-hover:text-white transition-colors">
           {handle}
         </span>
       </button>

@@ -14,7 +14,7 @@ export const PhoneFrame: React.FC<PhoneFrameProps> = ({ children, isFramed = tru
   return (
     <div className="relative mx-auto w-full max-w-[400px] h-[852px] bg-black rounded-[52px] p-3 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9),0_0_0_12px_#1c1c1e,0_0_0_14px_#2c2c2e] border border-white/10 flex flex-col overflow-hidden select-none">
       {/* Dynamic Island and Status Bar */}
-      <div className="relative z-30 shrink-0 h-11 px-6 flex items-center justify-between text-white text-[13px] font-semibold tracking-tight select-none pt-1">
+      <div className="relative z-30 shrink-0 h-11 px-6 flex items-center justify-between text-white text-sm font-semibold tracking-tight select-none pt-1">
         {/* Time matching screenshot */}
         <span>09:41</span>
 

@@ -96,7 +96,7 @@ export const Keypad: React.FC<KeypadProps> = ({
               aria-label="Volver"
             >
               <ArrowLeft className="w-5 h-5" />
-              <span>Back</span>
+              <span>Atrás</span>
             </button>
           ) : (
             <div className="w-12" />
@@ -134,7 +134,7 @@ export const Keypad: React.FC<KeypadProps> = ({
               <span className="inline-block w-[3px] h-10 bg-[#ff5a1f] ml-1 rounded-full animate-pulse" />
             </div>
           </div>
-          <span className="text-xs text-zinc-500 font-medium uppercase tracking-wider">USDC</span>
+          <span className="text-xs text-zinc-400 font-medium uppercase tracking-wider">USDC</span>
         </div>
 
         {/* Amount picker: preset buttons, or a 0 → MAX slider for Retirar */}
@@ -161,7 +161,7 @@ export const Keypad: React.FC<KeypadProps> = ({
         {showPresets && presetStyle === 'slider' && (
           <div className="mb-2 px-0.5">
             <div className="flex items-center gap-2.5">
-              <span className="text-[11px] font-semibold text-zinc-500 tabular-nums shrink-0">0$</span>
+              <span className="text-xs font-semibold text-zinc-400 tabular-nums shrink-0">0$</span>
               <input
                 type="range"
                 aria-label="Elegir monto deslizando"
@@ -175,12 +175,12 @@ export const Keypad: React.FC<KeypadProps> = ({
               <button
                 type="button"
                 onClick={() => onChange(formatSliderAmount(balance))}
-                className="text-[11px] font-semibold text-[#ff5a1f] hover:text-[#ff713e] shrink-0 cursor-pointer"
+                className="text-xs font-semibold text-[#ff5a1f] hover:text-[#ff713e] shrink-0 cursor-pointer"
               >
                 MAX
               </button>
             </div>
-            <div className="mt-0.5 text-center text-[10px] text-zinc-600 tabular-nums">
+            <div className="mt-0.5 text-center text-[10px] text-zinc-400 tabular-nums">
               {numValue.toFixed(2)} / {balance.toFixed(2)} USDC
             </div>
           </div>
@@ -217,9 +217,9 @@ export const Keypad: React.FC<KeypadProps> = ({
           <button
             onClick={onAction}
             disabled={actionDisabled || (!allowZero && numValue <= 0)}
-            className={`w-full h-13 rounded-2xl font-semibold text-[15px] flex items-center justify-center gap-2 shadow-lg transition-all ${
+            className={`w-full h-13 rounded-2xl font-semibold text-base flex items-center justify-center gap-2 shadow-lg transition-all ${
               actionDisabled || (!allowZero && numValue <= 0)
-                ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed shadow-none'
+                ? 'bg-zinc-800 text-zinc-400 cursor-not-allowed shadow-none'
                 : 'bg-[#ff5a1f] hover:bg-[#ff6c35] active:scale-[0.98] text-white shadow-[#ff5a1f]/25 cursor-pointer'
             }`}
           >

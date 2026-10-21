@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { ArrowLeft, Search, ArrowDownLeft, ArrowUpRight, Check } from 'lucide-react';
+import { ArrowLeft, Search, Check } from 'lucide-react';
+import { MovementGlyph, movementIconClasses } from './movementVisuals';
 import { Transaction } from '../types/wallet';
 import { CoinIcon } from './CoinIcon';
 
@@ -44,19 +45,25 @@ export const AllTransactionsModal: React.FC<AllTransactionsModalProps> = ({
           <ArrowLeft className="w-5 h-5" />
           <span>Volver</span>
         </button>
-        <h1 className="text-[17px] font-semibold text-white tracking-tight">Historial</h1>
+        <h1 className="text-lg font-semibold text-white tracking-tight">Historial</h1>
         <div className="w-12" />
       </div>
 
       {/* Search Input */}
       <div className="relative mb-3">
         <Search className="w-4 h-4 text-zinc-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+        <label htmlFor="history-search" className="sr-only">
+          Buscar movimientos
+        </label>
         <input
-          type="text"
+          id="history-search"
+          type="search"
+          inputMode="search"
+          autoComplete="off"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Buscar movimientos, contactos, notas..."
-          className="w-full h-11 pl-10 pr-4 rounded-xl bg-[#1e1e21] border border-white/10 text-white text-xs focus:outline-none focus:border-[#ff5a1f] placeholder:text-zinc-500"
+          className="w-full h-11 pl-10 pr-4 rounded-xl bg-[#1e1e21] border border-white/10 text-white text-xs focus:border-[#ff5a1f] placeholder:text-zinc-400"
         />
       </div>
 
@@ -86,7 +93,7 @@ export const AllTransactionsModal: React.FC<AllTransactionsModalProps> = ({
       {/* List */}
       <div className="flex-1 overflow-y-auto divide-y divide-white/[0.04] pr-1">
         {filtered.length === 0 ? (
-          <div className="py-12 text-center text-zinc-500 text-xs">
+          <div className="py-12 text-center text-zinc-400 text-xs">
             No se encontraron transacciones para este filtro.
           </div>
         ) : (
@@ -102,12 +109,12 @@ export const AllTransactionsModal: React.FC<AllTransactionsModalProps> = ({
               >
                 <div className="flex items-center gap-3.5 min-w-0">
                   <div className="relative shrink-0">
-                    <div className="w-10 h-10 rounded-full bg-[#222225] flex items-center justify-center text-white/90">
-                      {isIncoming ? (
-                        <ArrowDownLeft className="w-5 h-5 stroke-[2.2]" />
-                      ) : (
-                        <ArrowUpRight className="w-5 h-5 stroke-[2.2]" />
-                      )}
+                    {/* Same icon and colours as the notification feed and
+                        "Recientes". */}
+                    <div
+                      className={`w-10 h-10 rounded-full flex items-center justify-center ${movementIconClasses(tx.type)}`}
+                    >
+                      <MovementGlyph type={tx.type} iconClassName="w-5 h-5 stroke-[2.2]" />
                     </div>
                     {isInProgress ? (
                       <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-black flex items-center justify-center">
@@ -121,13 +128,13 @@ export const AllTransactionsModal: React.FC<AllTransactionsModalProps> = ({
                   </div>
 
                   <div className="min-w-0 pr-2">
-                    <p className="text-[14px] font-medium text-white truncate leading-snug">
+                    <p className="text-sm font-medium text-white truncate leading-snug">
                       {tx.type === 'withdrawal' || tx.title.toLowerCase().includes('withdrawal')
                         ? 'Retiro'
                         : tx.title}
                     </p>
                     <p
-                      className={`text-[12px] font-normal leading-snug truncate ${
+                      className={`text-xs font-normal leading-snug truncate ${
                         isInProgress
                           ? 'text-[#ff9500]'
                           : tx.type === 'withdrawal'
@@ -145,7 +152,7 @@ export const AllTransactionsModal: React.FC<AllTransactionsModalProps> = ({
                 </div>
 
                 <div className="text-right shrink-0">
-                  <div className="flex items-center justify-end gap-1.5 text-white font-medium text-[15px] tabular-nums leading-snug">
+                  <div className="flex items-center justify-end gap-1.5 text-white font-medium text-base tabular-nums leading-snug">
                     {tx.assetSymbol !== 'SOL' && (
                       <CoinIcon className="w-4 h-4 text-zinc-400" />
                     )}
@@ -153,9 +160,9 @@ export const AllTransactionsModal: React.FC<AllTransactionsModalProps> = ({
                       {!isIncoming ? '-' : ''}
                       {tx.amount % 1 === 0 ? tx.amount : tx.amount.toFixed(2)}
                     </span>
-                    <span className="text-[11px] text-zinc-400">{tx.assetSymbol ?? 'USDC'}</span>
+                    <span className="text-xs text-zinc-400">{tx.assetSymbol ?? 'USDC'}</span>
                   </div>
-                  <p className="text-[11px] font-normal text-zinc-500 leading-snug">
+                  <p className="text-xs font-normal text-zinc-400 leading-snug">
                     {tx.timestamp}
                   </p>
                 </div>

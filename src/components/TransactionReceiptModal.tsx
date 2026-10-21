@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { X, Check, Copy, Share2, ArrowDownLeft, ArrowUpRight, Download, CheckCircle2, ExternalLink } from 'lucide-react';
+import { X, Check, Copy, Share2, Download, CheckCircle2, ExternalLink } from 'lucide-react';
+import { MovementGlyph, movementIconClasses } from './movementVisuals';
 import { chain } from '../adapters';
 import { Transaction } from '../types/wallet';
 
@@ -57,7 +58,47 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
     setTimeout(() => setCopied(false), 2000);
   };
 
+  /**
+   * Download the receipt as a JSON file.
+   *
+   * The button used to flip to "¡Descargado!" without producing anything —
+   * a receipt the user believes they have but do not. This builds the file
+   * for real: the transaction as the app knows it, plus the export time.
+   */
   const handleDownload = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      transaction: {
+        id: transaction.id,
+        title: transaction.title,
+        type: transaction.type,
+        status: transaction.status,
+        amount: transaction.amount,
+        assetSymbol: transaction.assetSymbol ?? 'USDC',
+        fiatAmount: transaction.fiatAmount,
+        fiatCurrency: transaction.fiatCurrency,
+        counterparty: transaction.counterparty ?? null,
+        counterpartyEmail: transaction.counterpartyEmail ?? null,
+        method: transaction.method ?? null,
+        note: transaction.note ?? null,
+        txHash: transaction.txHash ?? null,
+        referenceId: transaction.referenceId ?? null,
+        date: transaction.date.toISOString(),
+        network: chain.describeNetwork(),
+        owner: userEmail ?? null,
+      },
+    };
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `rewallet-${transaction.txHash ?? transaction.id}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+
     setDownloadSuccess(true);
     setTimeout(() => setDownloadSuccess(false), 2500);
   };
@@ -87,6 +128,7 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
           </span>
           <button
             onClick={onClose}
+            aria-label="Cerrar comprobante"
             className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-colors"
           >
             <X className="w-4 h-4" />
@@ -95,12 +137,10 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
 
         {/* Center Icon & Amount */}
         <div className="text-center py-3">
-          <div className="w-14 h-14 rounded-full bg-[#222225] flex items-center justify-center text-white mx-auto mb-3 relative">
-            {isIncoming ? (
-              <ArrowDownLeft className="w-7 h-7 stroke-[2.2] text-[#26e5c8]" />
-            ) : (
-              <ArrowUpRight className="w-7 h-7 stroke-[2.2] text-[#ff5a1f]" />
-            )}
+          <div
+            className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-3 relative ${movementIconClasses(transaction.type)}`}
+          >
+            <MovementGlyph type={transaction.type} iconClassName="w-7 h-7 stroke-[2.2]" />
             {isCompleted ? (
               <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-[#10b981] flex items-center justify-center text-black">
                 <Check className="w-3 h-3 stroke-[3]" />
@@ -120,7 +160,7 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
           <p className="text-xs text-zinc-400 mb-3">{transaction.timestamp}</p>
 
           <div className="flex items-center justify-center gap-2 text-white font-bold text-3xl tabular-nums">
-            <span className="text-[13px] font-semibold text-zinc-500 uppercase tracking-wider">
+            <span className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">
               {formatAmountDisplay()}
             </span>
             <span>{transaction.amount.toFixed(2)}</span>
@@ -165,6 +205,7 @@ export const TransactionReceiptModal: React.FC<TransactionReceiptModalProps> = (
                   onClick={handleCopyId}
                   className="p-1 hover:text-white transition-colors"
                   title="Copiar hash"
+                  aria-label="Copiar hash de la transacción"
                 >
                   {copied ? <Check className="w-3 h-3 text-[#26e5c8]" /> : <Copy className="w-3 h-3" />}
                 </button>
