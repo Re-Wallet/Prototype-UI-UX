@@ -36,7 +36,7 @@ export {
   type OriginPattern,
 } from './cors';
 
-export { clientIp, createRateLimiter, type RateLimitOptions } from './rateLimit';
+export { clientIp, createRateLimiter, pruneExpiredCallers, type RateLimitOptions } from './rateLimit';
 
 export {
   buildContentSecurityPolicy,

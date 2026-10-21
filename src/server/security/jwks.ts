@@ -41,12 +41,37 @@ export class SessionUnavailableError extends Error {
 export interface JwksResolverOptions {
   /** The JWKS endpoint. */
   url: string;
-  /** How long a fetched key set is served without a refresh. */
+  /**
+   * How long a fetched key set is served without a refresh.
+   *
+   * Ten minutes: long enough that a normal request never pays for a fetch,
+   * short enough that a key rotation by Dynamic is picked up without a
+   * redeploy.
+   */
   maxAgeMs?: number;
-  /** How long a key set still works after a failed refresh. */
+  /**
+   * How long a key set still works after a failed refresh.
+   *
+   * A day: a Dynamic outage must not take the app down, and a key that was
+   * valid yesterday is still the right key today. Past that the set is
+   * treated as unknown and the dependency is reported as unavailable.
+   */
   staleMs?: number;
-  /** How long a failed refresh is not retried. */
+  /**
+   * How long a failed refresh is not retried.
+   *
+   * Thirty seconds: an outage costs one failed fetch per half-minute
+   * instead of one per request.
+   */
   cooldownMs?: number;
+  /**
+   * How long a fetch may take before it is abandoned.
+   *
+   * Five seconds, the same bound the baseline resolver used. Without it a
+   * hanging endpoint holds the request open for the platform's default
+   * timeout, which in Node is unbounded.
+   */
+  fetchTimeoutMs?: number;
   /** Injected clock, so the tests do not have to wait. */
   now?: () => number;
   /** Injected fetch, so the tests do not need a network. */
@@ -65,28 +90,37 @@ export function createCachingJwksResolver(options: JwksResolverOptions): JWTVeri
     maxAgeMs = 10 * 60 * 1000,
     staleMs = 24 * 60 * 60 * 1000,
     cooldownMs = 30 * 1000,
+    fetchTimeoutMs = 5 * 1000,
   } = options;
   const clock = options.now ?? Date.now;
   const doFetch = options.fetchImpl ?? fetch;
 
+  // The key set and the moment it was fetched. The moment doubles as the
+  // "last success" marker, so there is one clock in this resolver, not two.
   let fresh: { resolver: ReturnType<typeof createLocalJWKSet>; at: number } | null = null;
-  let lastSuccessAt = 0;
   let lastFailureAt: number | null = null;
   let inflight: Promise<void> | null = null;
 
   const load = async (): Promise<void> => {
-    const response = await doFetch(url, { headers: { accept: 'application/json' } });
-    if (!response.ok) {
-      throw new Error(`the JWKS endpoint answered ${response.status}`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), fetchTimeoutMs);
+    try {
+      const response = await doFetch(url, {
+        headers: { accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`the JWKS endpoint answered ${response.status}`);
+      }
+      const payload = (await response.json()) as { keys?: JWK[] };
+      if (!Array.isArray(payload.keys) || payload.keys.length === 0) {
+        throw new Error('the JWKS endpoint returned no keys');
+      }
+      const resolver = createLocalJWKSet({ keys: payload.keys });
+      fresh = { resolver, at: clock() };
+    } finally {
+      clearTimeout(timer);
     }
-    const payload = (await response.json()) as { keys?: JWK[] };
-    if (!Array.isArray(payload.keys) || payload.keys.length === 0) {
-      throw new Error('the JWKS endpoint returned no keys');
-    }
-    const resolver = createLocalJWKSet({ keys: payload.keys });
-    const at = clock();
-    fresh = { resolver, at };
-    lastSuccessAt = at;
   };
 
   const refresh = (): Promise<void> => {
@@ -113,7 +147,7 @@ export function createCachingJwksResolver(options: JwksResolverOptions): JWTVeri
     // Inside the cooldown after a failure, do not even try: the cached set is
     // the best answer available and the endpoint is known to be down.
     if (lastFailureAt !== null && at - lastFailureAt < cooldownMs) {
-      if (fresh && at - lastSuccessAt < staleMs) return fresh.resolver(protectedHeader, token);
+      if (fresh && at - fresh.at < staleMs) return fresh.resolver(protectedHeader, token);
       throw new SessionUnavailableError('The session key set is unavailable.');
     }
 
@@ -124,7 +158,7 @@ export function createCachingJwksResolver(options: JwksResolverOptions): JWTVeri
     } catch (error) {
       // The refresh failed. A key set fetched recently is still good for a
       // while: a Dynamic outage must not log every user out.
-      if (fresh && at - lastSuccessAt < staleMs) {
+      if (fresh && at - fresh.at < staleMs) {
         return fresh.resolver(protectedHeader, token);
       }
       throw new SessionUnavailableError('The session key set could not be fetched.', error);

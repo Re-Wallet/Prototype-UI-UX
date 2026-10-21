@@ -44,6 +44,9 @@ const DEFAULT_JWKS_BASE = 'https://app.dynamicauth.com/api/v0/sdk';
 /** The scope a session must carry to be treated as a person. */
 const REQUIRED_SCOPE = 'user:basic';
 
+/** Whether the missing-environment misconfiguration has already been reported. */
+let warnedAboutMissingEnvironment = false;
+
 /** Why a session could not be established. Safe to surface to the client. */
 export type SessionFailureReason =
   | 'missing_token'
@@ -209,7 +212,18 @@ function toVerificationError(error: unknown): SessionVerificationError {
  *   deployment should honour.
  */
 function isForEnvironment(payload: JWTPayload, environmentId: string): boolean {
-  if (!environmentId) return false;
+  if (!environmentId) {
+    // A deployment with no environment id cannot verify any session. That is
+    // a misconfiguration, not a rejected credential, so it says so out loud
+    // instead of quietly failing every request.
+    if (!warnedAboutMissingEnvironment) {
+      warnedAboutMissingEnvironment = true;
+      console.error(
+        '[auth] no Dynamic environment id is configured; every session will be rejected.'
+      );
+    }
+    return false;
+  }
 
   const claimed = typeof payload.environmentId === 'string' ? payload.environmentId : '';
   if (claimed) return claimed === environmentId;

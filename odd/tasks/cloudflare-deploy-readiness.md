@@ -278,4 +278,29 @@ tests that pin the corrections: a sibling environment whose id contains ours
 is rejected, a failed JWKS refresh keeps serving the cached key set, and a
 session service that is down answers 503 rather than 401.
 
+### Progress — 2026-10-21 (work unit 4 — the review of the corrections)
+
+The correction batch was reviewed too, with the user's explicit consent and
+the same four lenses. The reviewer was refused twice before it landed (a
+citation with three ranges in one field, then a capture whose `subject_hash`
+did not match the provider's — my own error, the transport caught it).
+
+**Result**: 1 corroborated, 2 escalated as inconclusive, 5 advisory.
+
+| Finding | Severity | Disposition | Fix |
+|---|---|---|---|
+| R3-002 — the new JWKS resolver dropped the 5-second fetch timeout the baseline resolver had, so a hanging endpoint holds the request open | corroborated | resilience | The fetch is bounded by an `AbortController` with the same 5-second limit, and the timeout is configurable |
+| R3-001 / R4 — removing the global prune also removed the release of **idle** callers' timestamps | escalated, causality unknown | memory | `pruneExpiredCallers()` is back as a **bounded** sweep: it walks at most 64 entries and stops at the first live one, because the table is ordered least-recently-seen first. A caller that stopped calling no longer holds its timestamps for the life of the process, and a request still never scans the whole table |
+| R2-JWKS-UNEXPLAINED_CONSTANTS | WARNING | readability | The three windows now carry the reason for their value: 10 minutes to avoid a fetch per request, a day so an outage does not take the app down, 30 seconds so an outage costs one failed fetch per half-minute instead of one per request |
+| R2-JWKS-COMPLEX_STATE | WARNING | readability | `lastSuccessAt` was always equal to `fresh.at`; it is gone, so the resolver keeps one clock instead of two |
+| R2-RATELIMIT_EVICTION_COMMENT | SUGGESTION | readability | The comment said "a request removes at most the entries it added", which was not true; it now says what the loops actually do |
+| R2-DYNAMIC_SESSION_ENV_GUARD | SUGGESTION | readability | A missing environment id is a misconfiguration, not a rejected credential, so it is now logged once instead of failing every session quietly |
+| R2-WALLET_API_WARNING_STATE | SUGGESTION | readability | The one-shot client warning re-arms when the client becomes available, so a late-initialising SDK still gets reported if it fails later |
+
+**After the second round**: `npm test` → **117 tests, 117 pass, 0 fail**,
+`npm run lint` → clean. Four new tests pin the new behaviour: a hanging key
+set is abandoned, the sweep releases the idle callers, the sweep stops at the
+first live caller, and the sweep is bounded.
+
+
 

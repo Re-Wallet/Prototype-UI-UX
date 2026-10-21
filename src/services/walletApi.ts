@@ -48,7 +48,12 @@ let warnedAboutMissingClient = false;
 function sessionToken(): string | null {
   try {
     const token = getDynamicClient().token;
-    return typeof token === 'string' && token.length > 0 ? token : null;
+    if (typeof token === 'string' && token.length > 0) {
+      // The client is there now. A later failure gets its own warning.
+      warnedAboutMissingClient = false;
+      return token;
+    }
+    return null;
   } catch (error) {
     // No Dynamic client yet: no environment id, or the SDK has not been
     // created. The request still goes out — a user-scoped route answers 401

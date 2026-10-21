@@ -146,6 +146,33 @@ test('a failed refresh is not retried inside the cooldown', async () => {
   assert.equal(counter.calls, 2);
 });
 
+/** A fetch stub that never answers, but honours the abort signal. */
+function hangingFetch(): typeof fetch {
+  return ((_url: string, init?: RequestInit) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('the fetch was abandoned')));
+    })) as unknown as typeof fetch;
+}
+
+test('a hanging key set is abandoned instead of holding the request open', async () => {
+  // Without a timeout, a hanging endpoint holds the request for the
+  // platform's default fetch timeout, which in Node is unbounded.
+  const resolver = createCachingJwksResolver({
+    url: URL_UNDER_TEST,
+    fetchTimeoutMs: 50,
+    fetchImpl: hangingFetch(),
+    now: () => 0,
+  });
+
+  const token = await signToken();
+  await assert.rejects(
+    async () => {
+      await resolver(HEADER, TOKEN_INPUT);
+    },
+    (error: unknown) => error instanceof SessionUnavailableError
+  );
+});
+
 test('a key set with no keys is refused', async () => {
   const resolver = createCachingJwksResolver({
     url: URL_UNDER_TEST,

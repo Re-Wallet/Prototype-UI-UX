@@ -10,7 +10,7 @@ import test from 'node:test';
 
 import type { NextFunction, Request, Response } from 'express';
 
-import { clientIp, createRateLimiter } from './rateLimit';
+import { clientIp, createRateLimiter, pruneExpiredCallers } from './rateLimit';
 
 interface Recorder {
   res: Response;
@@ -138,6 +138,46 @@ test('the eviction takes the least recently seen caller, not the busiest one', (
   const afterB = fakeResponse();
   limiter(fakeRequest('b'), afterB.res, next);
   assert.equal(afterB.statusCode, 200);
+});
+
+test('the sweep releases the callers that never come back', () => {
+  // The per-caller filter drops the expired timestamps of a caller that comes
+  // back; this is for the ones that never do. Without it their timestamps sit
+  // in the table for as long as the process lives.
+  const hits = new Map<string, number[]>([
+    ['idle-a', [100]],
+    ['idle-b', [100]],
+    ['live', [9_999]],
+  ]);
+
+  const removed = pruneExpiredCallers(hits, 10_000, 1_000);
+
+  assert.equal(removed, 2);
+  assert.deepEqual([...hits.keys()], ['live']);
+});
+
+test('the sweep stops at the first live caller', () => {
+  // The table is ordered least-recently-seen first, so the first live entry
+  // means every entry after it is live too. The sweep must not walk past it.
+  const hits = new Map<string, number[]>([
+    ['live', [9_999]],
+    ['behind-it', [9_998]],
+  ]);
+
+  const removed = pruneExpiredCallers(hits, 10_000, 1_000);
+
+  assert.equal(removed, 0);
+  assert.equal(hits.size, 2);
+});
+
+test('the sweep is bounded, so one request never walks the whole table', () => {
+  const hits = new Map<string, number[]>();
+  for (let i = 0; i < 500; i += 1) hits.set(`caller-${i}`, [100]);
+
+  const removed = pruneExpiredCallers(hits, 10_000, 1_000, 10);
+
+  assert.equal(removed, 10);
+  assert.equal(hits.size, 490);
 });
 
 test('the Cloudflare header identifies the caller, not the proxy', () => {

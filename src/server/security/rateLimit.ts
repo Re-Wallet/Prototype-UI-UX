@@ -55,17 +55,59 @@ export function clientIp(req: Request): string {
 }
 
 /**
+ * How many entries one request may sweep when releasing expired callers.
+ *
+ * The sweep is bounded on purpose: a request may not pay for the whole
+ * table. The table is ordered least-recently-seen first, so the expired
+ * callers cluster at the front and the sweep stops at the first live one.
+ */
+const MAX_SWEEP_PER_REQUEST = 64;
+
+/**
+ * Release the callers whose window has passed.
+ *
+ * The per-caller filter already drops the expired timestamps of a caller that
+ * comes back; this is for the callers that never come back. Without it their
+ * timestamps sit in the table for as long as the process lives.
+ *
+ * @returns how many entries were removed
+ */
+export function pruneExpiredCallers(
+  hits: Map<string, number[]>,
+  now: number,
+  windowMs: number,
+  maxSweep = MAX_SWEEP_PER_REQUEST
+): number {
+  const windowStart = now - windowMs;
+  let removed = 0;
+  let swept = 0;
+
+  for (const [key, timestamps] of hits) {
+    if (swept >= maxSweep) break;
+    swept += 1;
+    const newest = timestamps[timestamps.length - 1] ?? 0;
+    // The first live entry means every entry after it is live too.
+    if (newest > windowStart) break;
+    hits.delete(key);
+    removed += 1;
+  }
+
+  return removed;
+}
+
+/**
  * Build a rate limiter.
  *
  * The window is a sliding one: the timestamps of the requests still inside
  * the window are kept, and the limit applies to how many there are. A fixed
  * window would let a caller send twice the limit across a boundary.
  *
- * The table of callers is bounded, and the bound is enforced by evicting the
- * least recently seen key. The eviction is **amortized**: a request removes
- * at most the entries it added, and never scans the whole table. A flood of
- * unique callers therefore cannot turn one request into an O(n) sweep — the
- * table is the attacker's to grow, and the cost of growing it stays O(1).
+ * The table of callers is bounded twice over: expired callers are released as
+ * the window passes, and the least recently seen ones are evicted when the
+ * table is over its cap. Both are **amortized** — a request sweeps a bounded
+ * number of entries and never scans the whole table — so a flood of unique
+ * callers cannot turn one request into an O(n) sweep. The table is the
+ * attacker's to grow, and the cost of growing it stays bounded.
  */
 export function createRateLimiter(options: RateLimitOptions): RequestHandler {
   const { limit, windowMs, maxKeys = 10_000 } = options;
@@ -83,6 +125,11 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
     const timestamps = previous.filter((timestamp) => timestamp > windowStart);
 
     if (timestamps.length >= limit) {
+      // Keep the caller's place in the least-recently-seen order: a caller
+      // that keeps calling is a caller that is still here.
+      hits.delete(key);
+      hits.set(key, timestamps);
+
       // The oldest hit inside the window is the one that frees a slot.
       const retryAfterMs = Math.max(0, (timestamps[0] ?? now) + windowMs - now);
       res.setHeader('Retry-After', String(Math.max(1, Math.ceil(retryAfterMs / 1000))));
@@ -92,18 +139,20 @@ export function createRateLimiter(options: RateLimitOptions): RequestHandler {
 
     timestamps.push(now);
     // Re-insert so the Map's iteration order is "least recently seen first",
-    // which is what the eviction below relies on.
+    // which is what the eviction and the sweep below rely on.
     hits.delete(key);
     hits.set(key, timestamps);
 
     // Evict the least recently seen callers until the table is back under
-    // its cap. The loop removes as many entries as the table grew over the
-    // cap, so its cost is bounded by the attacker's own traffic.
+    // its cap, then release the ones whose window has passed. Both loops
+    // remove what the table grew, so their cost is bounded by the attacker's
+    // own traffic.
     while (hits.size > maxKeys) {
       const oldest = hits.keys().next();
       if (oldest.done) break;
       hits.delete(oldest.value);
     }
+    pruneExpiredCallers(hits, now, windowMs);
 
     next();
   };
