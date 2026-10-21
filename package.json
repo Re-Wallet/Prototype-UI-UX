@@ -11,12 +11,17 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test src/adapters/solana-pay.test.ts src/adapters/payment-verify.test.ts src/services/solanaHistory.test.ts src/services/webPaymentLink.test.ts",
+    "test": "node --import tsx --test src/adapters/solana-pay.test.ts src/adapters/payment-verify.test.ts src/services/solanaHistory.test.ts src/services/webPaymentLink.test.ts src/services/survey.test.ts src/services/bugReport.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate",
     "db:backfill": "tsx src/scripts/backfillHistory.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "audit:api": "tsx src/scripts/auditEndpoints.ts",
+    "audit:load": "tsx src/scripts/auditInitialLoad.ts",
+    "audit:parity": "tsx src/scripts/auditParity.ts",
+    "audit:flow": "tsx src/scripts/auditPaymentLinkFlow.ts",
+    "audit:claim": "tsx src/scripts/auditPaymentLinkClaim.ts"
   },
   "dependencies": {
     "@dynamic-labs-sdk/client": "^1.41.0",

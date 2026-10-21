@@ -23,10 +23,14 @@ import { NotificationsView } from './components/NotificationsView';
 import { QrScannerFlow } from './components/QrScannerFlow';
 import { HomeSurveyCard } from './components/HomeSurveyCard';
 import { HomeSurveyModal } from './components/HomeSurveyModal';
+import { BugReportButton } from './components/BugReportButton';
+import { BugReportSheet } from './components/BugReportSheet';
 import { PhoneFrame } from './components/PhoneFrame';
 import { Transaction } from './types/wallet';
 import { Language, translations } from './i18n/translations';
 import { surveyCopy } from './i18n/surveyCopy';
+import { bugAreaLabels, bugReportCopy } from './i18n/bugReportCopy';
+import { deriveBugArea, type BugArea } from './services/bugReport';
 import { getStoredLanguage, storeLanguage, subscribeLanguage } from './i18n/language';
 import { DynamicAccountGate } from './components/DynamicAccountGate';
 import { assetBySymbol, chain, type Address } from './adapters';
@@ -319,6 +323,11 @@ function WalletApp() {
   const [isSurveyOpen, setIsSurveyOpen] = useState<boolean>(false);
   const [isSurveyDone, setIsSurveyDone] = useState<boolean>(false);
 
+  // The bug report: available from every screen, carrying where the user
+  // was when they hit the problem.
+  const [isBugReportOpen, setBugReportOpen] = useState<boolean>(false);
+  const [bugReportArea, setBugReportArea] = useState<BugArea>('home');
+
   // Helpers
   const showToast = (title: string, message: string, amount?: number) => {
     setToast({
@@ -336,6 +345,18 @@ function WalletApp() {
     setActiveTab(tab);
     setActiveFlow(null);
     setIsInTransferSubflow(false);
+  };
+
+  /**
+   * Open the bug report from wherever the user is.
+   *
+   * The area is captured at the moment they open it: the screen they were
+   * on is the single most useful fact in the report, and it is gone once
+   * they navigate away.
+   */
+  const handleOpenBugReport = () => {
+    setBugReportArea(isSurveyOpen ? 'survey' : deriveBugArea(activeTab, activeFlow));
+    setBugReportOpen(true);
   };
 
   /** Clear the badge locally, then let the API confirm the unread count. */
@@ -628,6 +649,33 @@ function WalletApp() {
                   setIsSurveyDone(false);
                 }}
                 onSubmitted={() => setIsSurveyDone(true)}
+              />
+            )}
+
+            {/* The bug report entry - floating, so it is reachable from
+                every screen of the app, not only from the settings. */}
+            {window.location.pathname !== '/pay' && (
+              <BugReportButton
+                onClick={handleOpenBugReport}
+                label={bugReportCopy[language].title}
+              />
+            )}
+
+            {isBugReportOpen && (
+              <BugReportSheet
+                copy={bugReportCopy[language]}
+                areaLabels={bugAreaLabels[language]}
+                initialArea={bugReportArea}
+                context={{
+                  version: __APP_VERSION__,
+                  commit: __APP_COMMIT__,
+                  platform: navigator.userAgent,
+                  language,
+                  network: chain.describeNetwork(),
+                  walletAddress: (solanaWallet?.address as string) ?? null,
+                  occurredAt: new Date().toISOString(),
+                }}
+                onClose={() => setBugReportOpen(false)}
               />
             )}
           </div>
