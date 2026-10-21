@@ -427,11 +427,9 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             )}
           </div>
 
-          {/* The exit sits at the END of the screen, the same place the
-              "Pago recibido" screen puts it. */}
-          <div className="mt-4 shrink-0">
-            <BackToHomeButton onClick={closePaymentPage} />
-          </div>
+          {/* No exit here: this is the request, and the payer is not done
+              yet. The way out appears once the payment is sent, the same
+              place the "Pago recibido" screen puts it. */}
         </>
       )}
 
