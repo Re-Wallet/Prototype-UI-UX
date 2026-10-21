@@ -180,6 +180,30 @@ single call inside `submitSurvey()`.
 | **Onboarding** | `DynamicAccountGate` | Email OTP + language picker; embedded Solana wallet created by Dynamic |
 | **Reportar un problema** | `BugReportButton` + `BugReportSheet` | Floating entry on every screen: describes the issue and opens a pre-filled GitHub issue (title, body, `bug` label) with the build, platform, network and wallet attached |
 
+### The landing metric strip
+
+The landing proves the product with numbers instead of adjectives, and every
+number comes from a source that can be checked:
+
+| Metric | Source | How it is counted |
+|--------|--------|-------------------|
+| Transacciones | ledger | Distinct on-chain movements (`reference_id`), not rows |
+| Volumen | ledger | USDC moved, counted once per movement |
+| Billeteras creadas | Dynamic | `wallets.allTime` |
+| Tasa de éxito | ledger | completed / (completed + failed) |
+| Tiempo de operación | ledger | webhook received → movement projected |
+
+Two counting rules matter, and both were verified against the data. A
+transfer is stored **twice** (the sender and the receiver share the
+`reference_id`), so the volume is computed over distinct movements — summing
+the raw table would double every transfer. And `confirmed_at` is the
+*chain's* timestamp, not the moment the app learned about the movement, so
+the settlement time is measured on the webhook pipeline instead.
+
+`GET /api/landing/metrics` serves both sources in one payload — Dynamic's
+topline plus the ledger counters — cached in process and snapshotted in the
+database, so a database hiccup never puts zeros on a public page.
+
 ---
 
 ## Quick start
@@ -462,7 +486,7 @@ app keeps working on-chain data alone.
 | GET/POST | `/api/wallet/contacts` | Address book read / save recipient |
 | GET | `/api/wallet/identity?address=` | Registered email/handle for a pubkey |
 | PATCH | `/api/settings/language` | Persist the user's language |
-| GET | `/api/landing/metrics` | Landing metric strip: cached Dynamic topline (users/wallets/sessions) |
+| GET | `/api/landing/metrics` | Landing metric strip: Dynamic topline (users/wallets/sessions) plus the ledger counters (transactions/volume/success rate/processing time) |
 | POST | `/api/landing/survey` | Stores a survey response (name, lastName, email, q1..q4). The form now lives in the app (home screen), not in the landing. |
 
 ## Environment
@@ -510,6 +534,7 @@ BALANCE_CACHE_TTL_MS=15000          # balance cache lifetime
 SWEEPER_INTERVAL_MS=300000          # history reconciliation cadence (default 300s)
 SWEEPER_DISABLED=1                  # set to disable the sweeper
 DYNAMIC_METRICS_TTL_MS=300000       # landing metrics snapshot TTL
+LEDGER_METRICS_TTL_MS=300000        # ledger metrics snapshot TTL
 DYNAMIC_ENVIRONMENT_ID=             # default: VITE_DYNAMIC_ENVIRONMENT_ID
 ```
 
