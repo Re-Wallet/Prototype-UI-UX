@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { transferAmount } from '@dynamic-labs-sdk/client';
 import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
-import { useGetWalletAccounts, useInitStatus } from '@dynamic-labs-sdk/react-hooks';
+import { useGetWalletAccounts, useInitStatus, useUser } from '@dynamic-labs-sdk/react-hooks';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { assetByMint, chain, type Address } from '../adapters';
 import { getDynamicClient } from '../dynamicClient';
@@ -35,6 +35,11 @@ function getIntent(): WebPaymentIntent | null {
 export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitted }) => {
   const intent = useMemo(getIntent, []);
   const { data: initStatus } = useInitStatus();
+  // The session decides what the page shows: an open session goes straight
+  // to the balance and the payment, and only a closed one gets the
+  // onboarding. Deciding by the wallet instead would drop the sign-in form
+  // on a user who IS signed in but whose wallet is still being created.
+  const { data: sessionUser } = useUser();
   const { data: walletAccounts = [] } = useGetWalletAccounts();
   const payerWallet = walletAccounts.find(isSolanaWalletAccount);
   // A payer who signs in from the link needs a wallet to pay from, exactly
@@ -362,27 +367,45 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             )}
             {error && <p role="alert" className="mb-4 text-xs text-red-300">{error}</p>}
 
-            {payerWallet ? (
+            {sessionUser ? (
+              /* There is a session: this is the same flow as before — check the
+                 balance and pay. If the wallet is still being prepared, the
+                 page waits for it instead of asking to sign in again. */
               <>
-                <button
-                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#ff5a1f] font-semibold text-white transition hover:bg-[#ff713e] disabled:cursor-not-allowed disabled:opacity-50"
-                  disabled={
-                    isPaying || isLoadingBalance || balance === null ||
-                    isSelfPayment || !isValidAmount || !Number.isFinite(amount) ||
-                    amount <= 0 || amount > (balance ?? 0) ||
-                    !linkStatusResolved || linkSettled
-                  }
-                  onClick={handlePay}
-                >
-                  {isPaying && <Loader2 className="h-4 w-4 animate-spin" />}
-                  {isPaying ? 'Firmando y enviando…' : `Pagar ${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'} USDC`}
-                </button>
-                <p className="mt-4 text-center text-xs leading-5 text-zinc-400">
-                  La transferencia se firma con tu wallet Anonymus. También necesitas SOL de {intent.cluster} para la comisión.
-                </p>
+                {!payerWallet ? (
+                  <p className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
+                    {isCreatingWallet || initStatus !== 'finished' ? (
+                      <>
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                        Preparando tu wallet Solana…
+                      </>
+                    ) : (
+                      'No encontramos una wallet Solana para esta cuenta.'
+                    )}
+                  </p>
+                ) : (
+                  <>
+                    <button
+                      className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#ff5a1f] font-semibold text-white transition hover:bg-[#ff713e] disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={
+                        isPaying || isLoadingBalance || balance === null ||
+                        isSelfPayment || !isValidAmount || !Number.isFinite(amount) ||
+                        amount <= 0 || amount > (balance ?? 0) ||
+                        !linkStatusResolved || linkSettled
+                      }
+                      onClick={handlePay}
+                    >
+                      {isPaying && <Loader2 className="h-4 w-4 animate-spin" />}
+                      {isPaying ? 'Firmando y enviando…' : `Pagar ${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'} USDC`}
+                    </button>
+                    <p className="mt-4 text-center text-xs leading-5 text-zinc-400">
+                      La transferencia se firma con tu wallet Anonymus. También necesitas SOL de {intent.cluster} para la comisión.
+                    </p>
+                  </>
+                )}
               </>
             ) : (
-              /* No wallet yet: the payer signs in right here. A disabled pay
+              /* No session: the payer onboards right here. A disabled pay
                  button with no way forward is a dead end — the request has to
                  be payable from the link alone. */
               <div className="w-full">
@@ -391,11 +414,6 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
                     <Loader2 className="h-5 w-5 animate-spin" />
                     Conectando…
                   </p>
-                ) : isCreatingWallet ? (
-                  <p className="flex items-center justify-center gap-2 py-6 text-sm text-zinc-400">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    Preparando tu wallet Solana…
-                  </p>
                 ) : (
                   <SignInScreen
                     compact
@@ -403,12 +421,13 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
                     subtitle="Ingresá con tu email y creamos tu wallet Solana en segundos."
                   />
                 )}
-                {walletError && (
-                  <p role="alert" className="mt-2 text-xs text-red-300">
-                    No pudimos crear tu wallet: {walletError}
-                  </p>
-                )}
               </div>
+            )}
+
+            {walletError && (
+              <p role="alert" className="mt-2 text-xs text-red-300">
+                No pudimos crear tu wallet: {walletError}
+              </p>
             )}
           </div>
 
