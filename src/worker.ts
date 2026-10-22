@@ -42,16 +42,28 @@ nodeServer.listen(NODE_PORT);
 
 export default {
   /**
-   * The API or the landing, never both.
+   * The API, the landing or the app.
    *
-   * The API answers under `/api/`; everything else is the SPA. The split is
-   * here and not in Express because the assets live in the platform's asset
-   * store, not in the bundle.
+   * The API answers under `/api/`; the landing is the public page at `/`;
+   * everything else is the wallet app, which lives at `/app` and keeps its
+   * own routes (`/pay` for the payer, still at the root so the payment
+   * links in a message keep working).
+   *
+   * The split is here and not in Express because the assets live in the
+   * platform's asset store, not in the bundle.
    */
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const { pathname } = new URL(request.url);
     if (pathname.startsWith('/api/')) {
       return handleAsNodeRequest(NODE_PORT, request);
+    }
+    // The root is the landing: the public page, not the login.
+    //
+    // The assets binding redirects `/x/index.html` to `/x/`, so the
+    // directory path is fetched directly: the browser stays at `/` instead
+    // of ending up at `/landing/`.
+    if (pathname === '/') {
+      return env.ASSETS.fetch(new Request(new URL('/landing/', request.url), request));
     }
     return env.ASSETS.fetch(request);
   },

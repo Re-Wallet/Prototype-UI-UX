@@ -22,7 +22,11 @@
     "binding": "ASSETS",
     // A deep link such as /pay/<slug> is a client route, not a file: the
     // platform answers it with the SPA's index.html.
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    // The Worker decides what the root is. Without this, the assets are
+    // served FIRST and a request for `/` never reaches the Worker, so the
+    // landing could not take the root from the app.
+    "run_worker_first": true
   },
   "routes": [
     {
