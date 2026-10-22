@@ -24,6 +24,17 @@
     // platform answers it with the SPA's index.html.
     "not_found_handling": "single-page-application"
   },
+  "routes": [
+    {
+      "pattern": "rewallet.win",
+      "custom_domain": true
+    }
+  ],
+  // The workers.dev route: the deployment has to answer on it while the
+  // custom domain is being pointed. Without it the Worker is deployed with
+  // NO route at all and every request gets a 404.
+  "workers_dev": true,
+  "preview_urls": true,
   "triggers": {
     // The reconciliation sweep. Every five minutes, like the local timer.
     "crons": ["*/5 * * * *"]
@@ -42,9 +53,12 @@
     "SWEEPER_INTERVAL_MS": "300000",
     "DYNAMIC_METRICS_TTL_MS": "300000",
     "LEDGER_METRICS_TTL_MS": "300000",
-    "APP_ORIGINS": "https://rewallet.app",
-    "DYNAMIC_ENVIRONMENT_ID": "REPLACE_ME",
+    "APP_ORIGINS": "https://rewallet.win,https://rewallet.consulta-tteriolavayen.workers.dev",
+    "DYNAMIC_ENVIRONMENT_ID": "d074df47-deb9-4d73-9214-458da288014c",
     "NEON_REALTIME_DB": "neondb",
-    "NEON_REALTIME_URL": "REPLACE_ME"
+    "VITE_PUBLIC_APP_URL": "https://rewallet.consulta-tteriolavayen.workers.dev",
+    "VITE_DYNAMIC_ENVIRONMENT_ID": "d074df47-deb9-4d73-9214-458da288014c",
+    "SOLANA_RPC_URL": "https://api.devnet.solana.com",
+    "NEON_REALTIME_URL": "wss://br-delicate-frog-b4hdj8ws-neonrealtimesocket.compute.c-6.us-east-2.aws.neon.tech/"
   }
 }

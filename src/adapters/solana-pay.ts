@@ -25,7 +25,6 @@
  * - `label`, `message` and `memo` are URL-encoded UTF-8.
  */
 
-import QRCode from 'qrcode';
 import { getBase58Decoder, isAddress } from '@solana/kit';
 
 import type {
@@ -261,6 +260,11 @@ const DEFAULT_QR: Required<QrOptions> = {
 
 /** Render a payment URL as an SVG string. */
 export async function renderQrSvg(url: string | URL, options: QrOptions = {}): Promise<string> {
+  // The QR encoder is loaded on demand. It is only needed when a QR is
+  // actually rendered, and the API server never renders one: importing it
+  // eagerly put a font-parsing library in the server's startup path, which
+  // is CPU the server does not need to spend.
+  const { default: QRCode } = await import('qrcode');
   const { size, color, background } = { ...DEFAULT_QR, ...options };
   return QRCode.toString(url.toString(), {
     type: 'svg',
@@ -276,6 +280,7 @@ export async function renderQrDataUrl(
   url: string | URL,
   options: QrOptions = {}
 ): Promise<string> {
+  const { default: QRCode } = await import('qrcode');
   const { size, color, background } = { ...DEFAULT_QR, ...options };
   return QRCode.toDataURL(url.toString(), {
     type: 'image/png',
