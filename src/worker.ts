@@ -42,27 +42,39 @@ nodeServer.listen(NODE_PORT);
 
 export default {
   /**
-   * The API, the landing or the app.
+   * The API, the app or the landing.
    *
-   * The API answers under `/api/`; the landing is the public page at `/`;
-   * everything else is the wallet app, which lives at `/app` and keeps its
-   * own routes (`/pay` for the payer, still at the root so the payment
-   * links in a message keep working).
+   * The API answers under `/api/` on every host. The rest depends on
+   * **which host** asked:
    *
-   * The split is here and not in Express because the assets live in the
-   * platform's asset store, not in the bundle.
+   *   - `app.rewallet.win` → the wallet app, at the root of its host.
+   *   - `rewallet.win`     → the public landing at the root; anything else
+   *                          is still the app, so a deep link keeps working.
+   *
+   * The hosts that serve the app are configuration, not code: `APP_HOSTNAMES`
+   * in the environment. The workers.dev URL is the app too — it is the
+   * fallback while the custom domain is being set up.
    */
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    const { pathname } = new URL(request.url);
+    const { hostname, pathname } = new URL(request.url);
     if (pathname.startsWith('/api/')) {
       return handleAsNodeRequest(NODE_PORT, request);
     }
-    // The root is the landing: the public page, not the login.
+
+    const appHosts = (process.env.APP_HOSTNAMES ?? '')
+      .split(',')
+      .map((host) => host.trim())
+      .filter(Boolean);
+    const servesApp =
+      appHosts.includes(hostname) || hostname.endsWith('.workers.dev');
+
+    // The root of a landing host is the landing: the public page, not the
+    // login.
     //
     // The assets binding redirects `/x/index.html` to `/x/`, so the
     // directory path is fetched directly: the browser stays at `/` instead
     // of ending up at `/landing/`.
-    if (pathname === '/') {
+    if (!servesApp && pathname === '/') {
       return env.ASSETS.fetch(new Request(new URL('/landing/', request.url), request));
     }
     return env.ASSETS.fetch(request);
