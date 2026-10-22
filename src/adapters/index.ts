@@ -59,14 +59,6 @@ import {
 import { assetByMint, assetBySymbol, type SupportedCluster } from '../contracts/tokens';
 
 import {
-  inspectDynamicNetwork,
-  ensureDynamicNetwork,
-  genesisHashFor,
-  type AlignResult,
-  type NetworkAlignment,
-} from './dynamic-network';
-
-import {
   verifyPayment,
   findReferenceTransactions,
   getTransactionStatus,
@@ -80,6 +72,16 @@ import {
 // PUBLIC API
 // ============================================================================
 
+/**
+ * The chain access surface.
+ *
+ * The Dynamic network helpers are deliberately NOT here: they live in
+ * `dynamic-network.ts`, which imports the Dynamic SDK, and the SDK checks
+ * its own package version with a timer at import time. A Worker forbids a
+ * timer in the global scope, and the server does not need the SDK at all —
+ * it verifies the session with `jose`, not with the SDK. So the SDK stays
+ * on the client, where it belongs.
+ */
 export const chain = {
   // --- Configuration ------------------------------------------------------
   network,
@@ -137,9 +139,6 @@ export const chain = {
   createInMemoryLedger,
 
   // --- Dynamic network alignment -----------------------------------------
-  inspectDynamicNetwork,
-  ensureDynamicNetwork,
-  genesisHashFor,
 };
 
 // ============================================================================
@@ -156,8 +155,6 @@ export type {
   WatchPaymentEvent,
   WatchPaymentOptions,
   SupportedCluster,
-  AlignResult,
-  NetworkAlignment,
   ParsedPaymentRequest,
   ParsedTransferRequest,
 };

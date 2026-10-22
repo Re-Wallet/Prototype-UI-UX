@@ -1,7 +1,16 @@
 {
-  "name": "react-example",
+  "name": "rewallet",
   "private": true,
-  "version": "0.0.0",
+  "description": "USDC payments on Solana: a consumer wallet for charging, paying, receiving and withdrawing.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Re-Wallet/Prototype-UI-UX.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite --port=3000 --host=127.0.0.1",
@@ -11,7 +20,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test src/adapters/solana-pay.test.ts src/adapters/payment-verify.test.ts src/services/solanaHistory.test.ts src/services/webPaymentLink.test.ts src/services/survey.test.ts src/services/bugReport.test.ts src/services/ledgerMetrics.test.ts src/services/pendingCharges.test.ts",
+    "test": "node --import tsx --test src/adapters/solana-pay.test.ts src/adapters/payment-verify.test.ts src/services/solanaHistory.test.ts src/services/webPaymentLink.test.ts src/services/survey.test.ts src/services/bugReport.test.ts src/services/ledgerMetrics.test.ts src/services/pendingCharges.test.ts src/services/userProvisioning.test.ts src/services/webhookIngestor.test.ts src/server/security/address.test.ts src/server/security/dynamicSession.test.ts src/server/security/session.test.ts src/server/security/cors.test.ts src/server/security/rateLimit.test.ts src/server/security/headers.test.ts src/server/security/jwks.test.ts src/server/security/apiGate.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:migrate": "drizzle-kit migrate",
@@ -33,6 +42,7 @@
     "@neon/realtime": "^0.1.1",
     "@neon/realtime-drizzle": "^0.1.0",
     "@neon/realtime-react": "^0.1.1",
+    "@neondatabase/serverless": "^1.2.0",
     "@solana/kit": "^2.3.0",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.104.3",
@@ -41,16 +51,19 @@
     "better-sqlite3": "^13.0.3",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.4",
-    "express": "^4.21.2",
+    "express": "^5.3.0",
+    "jose": "^6.2.13",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
     "pg": "^8.23.1",
     "qrcode": "^1.5.4",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "workers-express": "^1.1.4"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261021.1",
     "@noble/ciphers": "1.3.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^4.17.21",
@@ -64,6 +77,7 @@
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
-    "vite-plugin-node-polyfills": "^0.28.0"
+    "vite-plugin-node-polyfills": "^0.28.0",
+    "wrangler": "^4.151.3"
   }
 }

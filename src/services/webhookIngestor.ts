@@ -22,7 +22,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, lt } from 'drizzle-orm';
 
 import { assetByMint, type SupportedCluster } from '../contracts/tokens';
 import { db } from '../db';
@@ -83,6 +83,26 @@ export function verifyDynamicSignature(
 // ============================================================================
 // PAYLOAD TYPES (structural — only the fields the projection reads)
 // ============================================================================
+
+/**
+ * The largest transfer the ledger accepts.
+ *
+ * On devnet an amount this large is not a payment, it is a malformed
+ * payload. The bound keeps a bad number from becoming a row that looks
+ * real.
+ */
+const MAX_TRANSFER_AMOUNT = 1e12;
+
+/**
+ * How long a delivery stays reprojectable.
+ *
+ * A projection that wrote nothing — an unregistered wallet, a payload that
+ * cannot be parsed — would otherwise be retried on every redelivery, for
+ * ever. Fifteen minutes covers the two real cases (the user signs in and
+ * their row appears seconds later; Dynamic's own redelivery schedule) and
+ * then the sweeper, which reads the chain, is the recovery path.
+ */
+const REPROJECT_WINDOW_MS = 15 * 60 * 1000;
 
 export interface DynamicEnvelope {
   messageId: string;
@@ -179,6 +199,12 @@ export function parseWalletActivity(data: unknown): DynamicWalletActivity | null
           const to = asString(transfer.toAddress);
           const amount = typeof transfer.amount === 'number' ? transfer.amount : null;
           if (!tokenAddress || !from || !to || amount === null) return null;
+          // A transfer amount is a positive, finite, bounded number. A zero, a
+          // negative, a NaN or an absurd value is a malformed payload, not a
+          // movement, and it must not become a row in the ledger.
+          if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_TRANSFER_AMOUNT) {
+            return null;
+          }
 
           const metadata = asRecord(transfer.metadata);
           return {
@@ -261,12 +287,57 @@ export async function recordWebhookDelivery(
   if (inserted.length > 0) return { id: inserted[0].id, duplicate: false };
 
   const [existing] = await db
-    .select({ id: webhookEventsTable.id })
+    .select({
+      id: webhookEventsTable.id,
+      processedAt: webhookEventsTable.processedAt,
+      receivedAt: webhookEventsTable.receivedAt,
+    })
     .from(webhookEventsTable)
     .where(eq(webhookEventsTable.messageId, envelope.messageId))
     .limit(1);
 
+  // "Seen" is not "processed". A delivery whose projection never completed
+  // has to be projectable again: Dynamic redelivers, and the ledger upsert
+  // and the link settlement are both idempotent, so the retry converges.
+  // Treating an unprocessed delivery as a duplicate dropped the movement for
+  // good.
+  //
+  // The window is what keeps that from becoming an endless redelivery. A
+  // delivery that can NEVER be projected — a malformed payload, a wallet
+  // that is never registered — would otherwise be reprojected every time it
+  // arrives, forever. After the window the sweeper has already reconciled
+  // the chain, so the delivery is consumed with the reason on the row.
+  if (existing && !existing.processedAt) {
+    const age = Date.now() - existing.receivedAt.getTime();
+    if (age < REPROJECT_WINDOW_MS) {
+      return { id: existing.id, duplicate: false };
+    }
+    await markWebhookProcessed(
+      existing.id,
+      'the reprojection window closed before the delivery was projected'
+    );
+    return { id: existing.id, duplicate: true };
+  }
+
   return { id: existing?.id ?? -1, duplicate: true };
+}
+
+/**
+ * Drop the delivery log entries that are older than `days`.
+ *
+ * The log is the idempotency ledger for the webhook, so it is never pruned
+ * while a delivery can still be projected. Once a delivery is days old, the
+ * sweeper has already reconciled the chain, and the row is history.
+ *
+ * Without this the table grows with every delivery Dynamic ever sends.
+ */
+export async function pruneWebhookDeliveries(days = 30): Promise<number> {
+  const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  const deleted = await db
+    .delete(webhookEventsTable)
+    .where(lt(webhookEventsTable.receivedAt, cutoff))
+    .returning({ id: webhookEventsTable.id });
+  return deleted.length;
 }
 
 export async function markWebhookProcessed(
@@ -283,16 +354,41 @@ export async function markWebhookProcessed(
     .where(eq(webhookEventsTable.id, deliveryId));
 }
 
+/**
+ * Record that a delivery was understood but NOT applied, and leave it
+ * reprojectable.
+ *
+ * This is the counterpart of `markWebhookProcessed`: it writes the reason
+ * and nothing else, so `processed_at` stays null and the delivery can be
+ * projected again. A delivery is only consumed once it actually wrote
+ * something — a projection that found no registered wallet, or one that
+ * failed halfway, has to stay available for the redelivery (or for the
+ * sweeper) to pick it up.
+ */
+export async function markWebhookPending(
+  deliveryId: number,
+  reason: string
+): Promise<void> {
+  if (deliveryId < 0) return;
+  await db
+    .update(webhookEventsTable)
+    .set({ processError: reason })
+    .where(eq(webhookEventsTable.id, deliveryId));
+}
+
 // ============================================================================
 // PROJECTION
 // ============================================================================
 
-export interface ProjectionResult {
-  /** Movements written (0 when the subject wallets are not registered). */
-  projected: number;
-  /** Set when the delivery was understood but nothing was written. */
-  ignored?: string;
-}
+/**
+ * What a projection did.
+ *
+ * The union is the point: a result that wrote nothing ALWAYS carries the
+ * reason, so the caller can record WHY instead of a generic placeholder.
+ */
+export type ProjectionResult =
+  | { wrote: true; projected: number; ignored?: undefined }
+  | { wrote: false; projected: 0; ignored: string };
 
 const NATIVE_SOL = 'native';
 
@@ -400,7 +496,7 @@ export async function projectWalletActivity(
   const registered = new Map(userRows.map((row) => [row.publicKey, row]));
   const subjects = resolveSubjects(activity, registered);
   if (subjects.length === 0) {
-    return { projected: 0, ignored: 'no registered wallet among the transaction parties' };
+    return { wrote: false, projected: 0, ignored: 'no registered wallet among the transaction parties' };
   }
 
   const cluster = clusterForNetworkId(activity.networkId);
@@ -580,7 +676,10 @@ export async function projectWalletActivity(
   }
 
   if (!projectable) {
-    return { projected: 0, ignored: 'no projectable asset transfer for the registered wallet' };
+    return { wrote: false, projected: 0, ignored: 'no projectable asset transfer for the registered wallet' };
   }
-  return { projected };
+  if (projected === 0) {
+    return { wrote: false, projected: 0, ignored: 'the movements were already in the ledger' };
+  }
+  return { wrote: true, projected };
 }

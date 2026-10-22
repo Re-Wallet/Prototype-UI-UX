@@ -23,13 +23,16 @@ const CONFIGURED_APP_URL = (
 // de demo apuntara a un host que no existe.
 const HAS_APP_URL =
   CONFIGURED_APP_URL !== "" && !CONFIGURED_APP_URL.includes("TU-APP-URL");
+/* La app vive en /app: este mismo origen sirve la landing en / y la
+   billetera en /app. */
 const APP_URL = IS_LOCAL
   ? "http://127.0.0.1:3000"
   : HAS_APP_URL
     ? CONFIGURED_APP_URL
-    : window.location.origin;
-/* API — en dev es el server Express (:3001); en prod, el mismo worker. */
-const API_URL = IS_LOCAL ? "http://127.0.0.1:3001" : APP_URL || window.location.origin;
+    : window.location.origin + "/app";
+/* API — en dev es el server Express (:3001); en prod, el mismo origen que
+   sirve esta página, bajo /api. */
+const API_URL = IS_LOCAL ? "http://127.0.0.1:3001" : window.location.origin;
 
 /* ---------------------------------------------------------------------------
    MÉTRICAS — valores reales vía GET /api/landing/metrics.

@@ -3,7 +3,12 @@ import { transferAmount } from '@dynamic-labs-sdk/client';
 import { isSolanaWalletAccount } from '@dynamic-labs-sdk/solana';
 import { useGetWalletAccounts, useInitStatus, useUser } from '@dynamic-labs-sdk/react-hooks';
 import { CheckCircle2, Loader2 } from 'lucide-react';
-import { assetByMint, chain, type Address } from '../adapters';
+import {
+  assetByMint,
+  chain,
+  type Address,
+} from '../adapters';
+import { ensureDynamicNetwork } from '../adapters/dynamic-network';
 import { getDynamicClient } from '../dynamicClient';
 import { playPaymentConfirmed, unlockAudio } from '../services/sound';
 import { BackToHomeButton } from './BackToHomeButton';
@@ -225,7 +230,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
       // building a transaction, otherwise the fee payer is debited on a
       // network where it has no balance and the failure is an opaque
       // simulation error.
-      const alignment = await chain.ensureDynamicNetwork(payerWallet);
+      const alignment = await ensureDynamicNetwork(payerWallet);
       if (!alignment.ok) {
         throw new Error(
           alignment.alignment.reason ??
@@ -348,7 +353,7 @@ export const WebPaymentPage: React.FC<WebPaymentPageProps> = ({ onPaymentSubmitt
             <div className="mb-5 w-full rounded-2xl border border-white/10 bg-[#161619] p-4">
               <p className="mb-2 text-xs text-zinc-400">Pagar a</p>
               <p className="font-mono text-sm text-zinc-200">
-                {recipientIdentity?.email ?? shortenAddress(intent.recipient)}
+                {recipientIdentity?.handle ?? shortenAddress(intent.recipient)}
               </p>
               <p className="mt-3 text-xs text-zinc-400">Cadena/Moneda</p>
               <p className="text-sm font-medium text-white">Solana/{asset?.symbol ?? 'USDC'}</p>

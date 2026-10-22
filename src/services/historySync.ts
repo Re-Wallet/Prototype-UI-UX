@@ -12,10 +12,8 @@
  *   - the periodic sweeper that catches what Dynamic never emits
  *     (`wallet.activity` is confirmed-only, so failed transactions are
  *     invisible to it),
- *   - the webhook ingestor's projection step.
+ *   - the ledger projection the webhook also performs.
  */
-
-import { eq } from 'drizzle-orm';
 
 import type { Address } from '../adapters';
 import { db } from '../db';
@@ -108,23 +106,6 @@ export async function syncWalletHistory(
   const { inserted, updated } = await upsertTransactions(userId, persisted, publicKey);
 
   return { userId, publicKey, movements: movements.length, inserted, updated };
-}
-
-/** Resolve a wallet by public key, then sync it. */
-export async function syncWalletByPubkey(
-  publicKey: string
-): Promise<SyncResult | null> {
-  const address = publicKey.trim();
-  if (!address) return null;
-
-  const [user] = await db
-    .select({ id: usersTable.id, publicKey: usersTable.publicKey })
-    .from(usersTable)
-    .where(eq(usersTable.publicKey, address))
-    .limit(1);
-
-  if (!user) return null;
-  return syncWalletHistory(user.id, user.publicKey);
 }
 
 function sleep(ms: number): Promise<void> {

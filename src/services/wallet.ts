@@ -1,7 +1,7 @@
 /**
  * Wallet service layer.
  *
- * Maps persisted SQLite wallet records to the API domain types.
+ * Maps persisted wallet records to the API domain types.
  */
 
 import { and, desc, eq, getTableColumns, inArray, isNotNull, ne, sql, type SQL } from 'drizzle-orm';
@@ -23,7 +23,7 @@ import type {
 import type { Contact as UiContact, Transaction as UiTransaction } from '../types/wallet';
 
 import { mapTransaction, mapLiveTransactionRow, type LiveTransactionRow } from './transactionMapper';
-import { invalidateBalances } from './balanceCache';
+import { getBalances, invalidateBalances } from './balanceCache';
 import { cacheKey, invalidate } from './readCache';
 
 // ============================================================================
@@ -87,31 +87,10 @@ export function mapUser(row: DbUser): WalletUserProfile {
 // ============================================================================
 
 /**
- * Resolve the primary persisted wallet.
- *
- * Peers (counterparties) are also rows in `users`, so ordering by id alone can
- * pick the wrong wallet. Prefer the KYC-verified wallet that owns transactions,
- * falling back to the oldest row.
- */
-export async function getPrimaryUser(): Promise<WalletUserProfile | null> {
-  const rows = await db
-    .select()
-    .from(usersTable)
-    .orderBy(
-      sql`CASE WHEN ${usersTable.kycStatus} = 'verified' THEN 0 ELSE 1 END`,
-      sql`(SELECT COUNT(*) FROM ${transactionsTable} WHERE ${transactionsTable.userId} = ${usersTable.id}) DESC`,
-      usersTable.id
-    )
-    .limit(1);
-
-  return rows.length > 0 ? mapUser(rows[0]) : null;
-}
-
-/**
  * Resolve a wallet profile by its Solana public key.
  *
  * Used to scope per-session data (contacts, recent recipients) to the wallet
- * the user authenticated with, instead of the single primary user.
+ * the user authenticated with.
  */
 export async function getUserByPubkey(
   publicKey: string
@@ -662,7 +641,14 @@ export async function upsertContactByPubkey(
 
 export interface WalletSnapshot {
   user: WalletUserProfile;
-  balance: number;
+  /**
+   * The wallet's USDC balance, read from the chain.
+   *
+   * `null` means the chain could not be read. It is NOT zero: a snapshot
+   * that says "0 USDC" for a wallet holding money reads as lost funds, and
+   * that is the one answer a payment app must never give.
+   */
+  balance: number | null;
   transactions: UiTransaction[];
   contacts: UiContact[];
 }
@@ -689,21 +675,25 @@ export async function getWalletSnapshot(userId: number): Promise<WalletSnapshot 
     listContacts(userId),
   ]);
 
+  // The balance comes from the chain, not from `users.balance_usdc`.
+  //
+  // Nothing in the server ever writes that column, so it stays at its
+  // default of zero, and a snapshot that says "0 USDC" for a wallet holding
+  // money is worse than no snapshot at all. The chain is the only source of
+  // truth for a balance — that is the same rule the ledger projection
+  // follows.
+  //
+  // When the chain cannot be read the balance is `null`, not zero: "we do
+  // not know" and "you have nothing" are different answers, and a payment
+  // app must not confuse them.
+  const balances = await getBalances(user.publicKey).catch(() => null);
+
   return {
     user: profile,
-    balance: profile.balanceUsdc,
+    balance: balances?.usdc ?? null,
     transactions,
     contacts,
   };
-}
-
-export async function listNotifications(userId: number, limit = 20) {
-  return db
-    .select()
-    .from(notificationsTable)
-    .where(eq(notificationsTable.userId, userId))
-    .orderBy(desc(notificationsTable.createdAt))
-    .limit(limit);
 }
 
 /**

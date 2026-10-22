@@ -24,15 +24,14 @@
 import dotenv from 'dotenv';
 dotenv.config({ path: ['.env.local', '.env'] });
 
-import express, { type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import {
-  countUnreadNotifications,
   getWalletSnapshot,
   getUserByPubkey,
   insertPendingTransfer,
-  listNotifications,
   listRecentRecipients,
   listNotificationsWithUnread,
   listTransactions,
@@ -41,9 +40,11 @@ import {
   upsertContactByPubkey,
 } from './src/services/wallet';
 import { assetBySymbol, chain, confirmTransferToRecipient, type Address } from './src/adapters';
+import type { TransferVerdict } from './src/adapters/payment-verify';
 import { getBalances } from './src/services/balanceCache';
 import { cacheKey, getCached } from './src/services/readCache';
 import { getUserIdByPubkey } from './src/services/userCache';
+import { provisionUser, ProvisioningError } from './src/services/userProvisioning';
 import { dbQueryCounter } from './src/services/dbMetrics';
 import { getSignatureFeePayer, verifySignatureOwnership } from './src/services/signatureOwnership';
 import { pacedRpc } from './src/services/rpcThrottle';
@@ -62,17 +63,34 @@ import {
   expireStalePaymentLinks,
 } from './src/services/paymentLinks';
 import {
+  markWebhookPending,
   markWebhookProcessed,
+  pruneWebhookDeliveries,
   parseEnvelope,
   parseWalletActivity,
   projectWalletActivity,
   recordWebhookDelivery,
   verifyDynamicSignature,
 } from './src/services/webhookIngestor';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
-import { db, pool, warmPool } from './src/db';
+import { db, warmPool } from './src/db';
+import { isWorkersRuntime } from './src/server/runtime';
 import { landingSurveyResponses, users as usersTable } from './src/db/schema';
+import {
+  BASE58_RE,
+  createCorsMiddleware,
+  createDynamicSessionVerifier,
+  createRateLimiter,
+  defaultAllowedOrigins,
+  parseOriginPatterns,
+  requireOwnedWallet,
+  requireSession,
+  requireSessionFor,
+  securityHeaders,
+  walletFromBody,
+  walletFromQuery,
+} from './src/server/security';
 
 const app = express();
 /**
@@ -94,6 +112,8 @@ process.on('uncaughtException', (error) => {
 const PORT = Number(process.env.API_PORT ?? 3001);
 const HOST = process.env.API_HOST ?? '127.0.0.1';
 
+
+
 /**
  * `express.json` must keep the exact request bytes: Dynamic signs the RAW
  * body, and `JSON.stringify(parsed)` does not byte-match it in general.
@@ -101,9 +121,6 @@ const HOST = process.env.API_HOST ?? '127.0.0.1';
 interface RawBodyRequest extends Request {
   rawBody?: Buffer;
 }
-
-// Base58 pubkey check: Solana addresses are 32-44 chars of the base58 alphabet.
-const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 app.use(
   express.json({
@@ -114,14 +131,116 @@ app.use(
   })
 );
 
-// Permissive CORS for local development (vite dev server on another port).
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, x-dynamic-signature-256');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  next();
+// ============================================================================
+// SECURITY LAYER
+// ============================================================================
+
+/**
+ * The Dynamic environment this deployment belongs to.
+ *
+ * It is also the path of the signing keys, so a token minted by another
+ * Dynamic environment cannot verify here even when it is copied verbatim.
+ */
+const DYNAMIC_ENVIRONMENT_ID =
+  process.env.DYNAMIC_ENVIRONMENT_ID ?? process.env.VITE_DYNAMIC_ENVIRONMENT_ID ?? '';
+
+/**
+ * The session verifier.
+ *
+ * A deployment without an environment id cannot verify anything, so every
+ * user-scoped route answers 401. That is the safe default: an API that
+ * cannot authenticate must not pretend it can.
+ */
+const sessionVerifier = createDynamicSessionVerifier({
+  environmentId: DYNAMIC_ENVIRONMENT_ID,
 });
+
+/**
+ * The origins allowed to call this API.
+ *
+ * The local dev servers are always allowed; a deployment adds its own
+ * through `APP_ORIGINS` (comma-separated, one wildcard segment allowed).
+ */
+const allowedOrigins = [
+  ...defaultAllowedOrigins(),
+  ...parseOriginPatterns(process.env.APP_ORIGINS),
+];
+
+/**
+ * The gate for a user-scoped route.
+ *
+ * A verified session that controls the wallet the route is about. Both
+ * checks run before the handler, so an unauthenticated request never
+ * reaches the database.
+ */
+const sessionGate = (read: (req: Request) => unknown) => requireSessionFor(sessionVerifier, read);
+
+/**
+ * Rate limits, in requests per minute, per caller.
+ *
+ * The tiers follow what each route actually *costs*, not what it returns:
+ *
+ * - `CLAIM` (10): the endpoint verifies the transfer on-chain with up to
+ *   seven paced RPC reads, so it is the one route where a caller spends the
+ *   shared Solana RPC budget. Ten a minute leaves room for a real payer
+ *   retrying a slow transaction and still stops a spammer.
+ * - `CREATE_LINK` (30): a merchant creates charge links in bursts while
+ *   preparing an invoice, but never in the hundreds.
+ * - `WRITE` (60): marking notifications read or saving a contact is cheap,
+ *   and the app batches them behind a poll.
+ * - `READ` (120): the poll alone is two requests a minute per open tab, so
+ *   the read tier has to leave room for several tabs plus the focus
+ *   refetches.
+ *
+ * These counters live in the process, so the authoritative limit is a
+ * Cloudflare WAF rate-limiting rule at the edge; this is the
+ * application-level floor.
+ */
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const CLAIM_RATE_LIMIT = 10;
+
+/**
+ * How long the claim waits for the chain to confirm the payment.
+ *
+ * A transaction that is visible but only `processed` reaches `finalized` in
+ * about thirteen seconds, so a wait shorter than that rejects payments for
+ * being early. Twenty seconds covers it with room for a slow RPC.
+ */
+const CONFIRM_DEADLINE_MS = 20_000;
+
+/** The attempts are a safety cap; the deadline is the real budget. */
+const CONFIRM_MAX_ATTEMPTS = 12;
+
+/** The longest single pause between two confirmation reads. */
+const CONFIRM_BACKOFF_MAX_MS = 2_000;
+
+/**
+ * What a Solana transaction signature looks like.
+ *
+ * The claim waits up to twenty seconds for the chain, so the signature is
+ * checked BEFORE that wait starts. A string that cannot be a signature would
+ * otherwise hold a request handler for the whole budget, and a handful of
+ * them would be a denial of service with no transaction to show for it.
+ */
+const BASE58_SIGNATURE_RE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
+const CREATE_LINK_RATE_LIMIT = 30;
+const WRITE_RATE_LIMIT = 60;
+const READ_RATE_LIMIT = 120;
+
+const claimRateLimit = createRateLimiter({ limit: CLAIM_RATE_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS });
+const createLinkRateLimit = createRateLimiter({
+  limit: CREATE_LINK_RATE_LIMIT,
+  windowMs: RATE_LIMIT_WINDOW_MS,
+});
+const writeRateLimit = createRateLimiter({ limit: WRITE_RATE_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS });
+const readRateLimit = createRateLimiter({ limit: READ_RATE_LIMIT, windowMs: RATE_LIMIT_WINDOW_MS });
+
+// Security headers first, so every response carries them — including the
+// preflight answers below.
+app.use(securityHeaders({ hsts: process.env.NODE_ENV === 'production' }));
+
+// The CORS allowlist replaces the old wildcard.
+app.use(createCorsMiddleware({ allowedOrigins }));
 
 // Counts the database round-trips of each request and publishes the total in
 // the `X-DB-Queries` header. With a remote database every round-trip costs a
@@ -202,12 +321,24 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
   try {
     if (envelope.eventName === 'wallet.activity') {
       if (!activity) {
+        // A payload that cannot be parsed will never parse: it is a dead
+        // letter, not a transient failure. Consuming it stops the redelivery
+        // loop, and the sweeper still reconciles the movement from the
+        // chain. The reason is on the row.
         await markWebhookProcessed(delivery.id, 'unparseable wallet.activity payload');
         console.warn(`[webhook] unparseable wallet.activity messageId=${envelope.messageId}`);
         return;
       }
       const result = await projectWalletActivity(envelope, activity);
-      await markWebhookProcessed(delivery.id);
+      if (result.wrote) {
+        await markWebhookProcessed(delivery.id);
+      } else {
+        // Nothing was written: the wallet is not registered yet, or no link
+        // matched. The delivery is NOT consumed, so a redelivery — or the
+        // sweeper — can project it once the row exists. Consuming it here
+        // dropped the movement for good.
+        await markWebhookPending(delivery.id, result.ignored);
+      }
       console.log(
         `[webhook] projected ${result.projected} movement(s) for ${transactionHash}` +
           (result.ignored ? ` (${result.ignored})` : '')
@@ -219,7 +350,9 @@ app.post('/api/webhooks/dynamic', async (req: RawBodyRequest, res: Response) => 
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await markWebhookProcessed(delivery.id, message).catch(() => undefined);
+    // A failed projection is not a processed delivery. The reason is
+    // recorded and the delivery stays available for a redelivery.
+    await markWebhookPending(delivery.id, message).catch(() => undefined);
     console.error(`[webhook] projection failed messageId=${envelope.messageId}: ${message}`);
   }
 });
@@ -236,7 +369,7 @@ app.get('/api/health', async (_req, res) => {
   // map of the infrastructure. The status is enough for a probe.
   let database: { status: string };
   try {
-    await pool.query('SELECT 1');
+    await db.execute(sql`SELECT 1`);
     database = { status: 'ok' };
   } catch (error) {
     console.error('[health] database probe failed:', error);
@@ -272,7 +405,7 @@ app.get('/api/health', async (_req, res) => {
 // WALLET
 // ============================================================================
 
-app.get('/api/wallet', async (req, res) => {
+app.get('/api/wallet', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   // Scoped by the wallet, like every other wallet endpoint. Without the
   // parameter this used to return the PRIMARY user's full profile — email,
   // phone, balance, history and contacts — to anyone who asked.
@@ -291,7 +424,7 @@ app.get('/api/wallet', async (req, res) => {
   res.json(snapshot);
 });
 
-app.get('/api/wallet/transactions', async (req, res) => {
+app.get('/api/wallet/transactions', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   // Scoped by the caller's wallet so a multi-user DB never mixes histories.
   // Falls back to the primary user for older callers that omit the param.
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
@@ -309,7 +442,7 @@ app.get('/api/wallet/transactions', async (req, res) => {
  * query reach the UI without a refetch. The DB query itself never leaves
  * the server — only its encrypted, expiring capability does.
  */
-app.post('/api/wallet/transactions/live', async (req, res) => {
+app.post('/api/wallet/transactions/live', sessionGate(walletFromBody), async (req: Request, res: Response) => {
   const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
   if (!wallet || !BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet body field must be a base58 Solana address.' });
@@ -332,12 +465,12 @@ app.post('/api/wallet/transactions/live', async (req, res) => {
  * or sweep lands. The webhook projection later upserts the same
  * `(user, referenceId)` row with `completed`.
  */
-app.post('/api/wallet/transactions/pending', async (req, res) => {
+app.post('/api/wallet/transactions/pending', sessionGate(walletFromBody), writeRateLimit, async (req: Request, res: Response) => {
   const { wallet, signature, counterpartyPubkey, amountUsdc, assetSymbol, note } = req.body ?? {};
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: "wallet must be the sender's base58 Solana address." });
   }
-  if (typeof signature !== 'string' || signature.trim().length < 32) {
+  if (typeof signature !== 'string' || !BASE58_SIGNATURE_RE.test(signature.trim())) {
     return res.status(400).json({ error: 'signature must be the base58 transaction signature.' });
   }
   if (typeof counterpartyPubkey !== 'string' || !BASE58_RE.test(counterpartyPubkey.trim())) {
@@ -383,7 +516,7 @@ app.post('/api/wallet/transactions/pending', async (req, res) => {
  * Scoped by `wallet` like the transaction history so a multi-user DB never
  * mixes feeds; falls back to the primary user for older callers.
  */
-app.get('/api/wallet/notifications', async (req, res) => {
+app.get('/api/wallet/notifications', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
   const userId = wallet ? await getUserIdByPubkey(wallet) : null;
   if (userId === null) {
@@ -403,7 +536,7 @@ app.get('/api/wallet/notifications', async (req, res) => {
  * Mark notifications read once the user opens the feed. Body:
  * `{ wallet, ids? }` — omit `ids` to clear the whole feed.
  */
-app.post('/api/wallet/notifications/read', async (req, res) => {
+app.post('/api/wallet/notifications/read', sessionGate(walletFromBody), writeRateLimit, async (req: Request, res: Response) => {
   const { wallet, ids } = req.body ?? {};
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: 'wallet must be the base58 Solana address.' });
@@ -425,7 +558,7 @@ app.post('/api/wallet/notifications/read', async (req, res) => {
 
 // Contacts are scoped to the authenticated session: the client sends the
 // Dynamic wallet address so each user sees only the recipients THEY sent to.
-app.get('/api/wallet/contacts', async (req, res) => {
+app.get('/api/wallet/contacts', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
   if (!BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
@@ -441,7 +574,7 @@ app.get('/api/wallet/contacts', async (req, res) => {
   );
 });
 
-app.get('/api/wallet/balances', async (req, res) => {
+app.get('/api/wallet/balances', sessionGate(walletFromQuery), readRateLimit, async (req: Request, res: Response) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
   if (!BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
@@ -469,7 +602,7 @@ app.get('/api/wallet/balances', async (req, res) => {
  * slug, persists the row with `status: 'active'`, and returns the reference
  * so the client can embed it in the payment URL.
  */
-app.post('/api/payment-links', async (req, res) => {
+app.post('/api/payment-links', sessionGate(walletFromBody), createLinkRateLimit, async (req: Request, res: Response) => {
   const { wallet, amountUsdc, concept } = req.body ?? {};
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: 'wallet must be the base58 recipient address.' });
@@ -567,7 +700,7 @@ app.get('/api/payment-links/by-slug/:slug', async (req, res) => {
 /**
  * List a user's payment links, newest first.
  */
-app.get('/api/payment-links', async (req, res) => {
+app.get('/api/payment-links', sessionGate(walletFromQuery), async (req: Request, res: Response) => {
   const wallet = typeof req.query.wallet === 'string' ? req.query.wallet.trim() : '';
   if (!BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet query param must be a base58 Solana address.' });
@@ -588,7 +721,7 @@ app.get('/api/payment-links', async (req, res) => {
  * collector's screen updates to "Pago recibido" without polling. The DB
  * query never leaves the server; only its encrypted, expiring capability does.
  */
-app.post('/api/payment-links/live', async (req, res) => {
+app.post('/api/payment-links/live', sessionGate(walletFromBody), async (req: Request, res: Response) => {
   const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
   if (!wallet || !BASE58_RE.test(wallet)) {
     return res.status(400).json({ error: 'wallet body field must be a base58 Solana address.' });
@@ -606,9 +739,15 @@ app.post('/api/payment-links/live', async (req, res) => {
 });
 
 /**
- * Public identity for a wallet address: the registered email/handle so the
- * payment page can show "Pagar a {email}" instead of a raw pubkey. Unknown
+ * Public identity for a wallet address: the display handle, so the payment
+ * page can show "Pagar a {handle}" instead of a raw pubkey. Unknown
  * addresses answer nulls (not an error) and the client falls back.
+ *
+ * The account e-mail used to be part of this payload. It is not any more:
+ * this route is public and its input is an on-chain address, which anybody
+ * can enumerate, so publishing the e-mail behind it turned a lookup into a
+ * scraper for the user directory. The handle is the name the user chose to
+ * publish; the e-mail is not.
  */
 app.get('/api/wallet/identity', async (req, res) => {
   const address = typeof req.query.address === 'string' ? req.query.address.trim() : '';
@@ -616,23 +755,23 @@ app.get('/api/wallet/identity', async (req, res) => {
     return res.status(400).json({ error: 'address query param must be a base58 Solana address.' });
   }
   // The display identity of a wallet changes only when the user edits their
-  // profile, so it is cached. Only the two display fields are read.
+  // profile, so it is cached. Only the display field is read.
   const identity = await getCached(
     cacheKey.identity(address),
     async () => {
       const [row] = await db
-        .select({ email: usersTable.email, handle: usersTable.handle })
+        .select({ handle: usersTable.handle })
         .from(usersTable)
         .where(eq(usersTable.publicKey, address))
         .limit(1);
-      return { email: row?.email ?? null, handle: row?.handle ?? null };
+      return { handle: row?.handle ?? null };
     },
     { ttlMs: 300_000 }
   );
   res.json(identity);
 });
 
-app.post('/api/wallet/contacts', async (req, res) => {
+app.post('/api/wallet/contacts', sessionGate(walletFromBody), writeRateLimit, async (req: Request, res: Response) => {
   const { wallet, publicKey, name } = req.body ?? {};
   if (typeof wallet !== 'string' || !BASE58_RE.test(wallet.trim())) {
     return res.status(400).json({ error: 'wallet must be the sender\'s base58 Solana address.' });
@@ -654,10 +793,108 @@ app.post('/api/wallet/contacts', async (req, res) => {
 });
 
 // ============================================================================
+// RUNTIME CONFIG
+// ============================================================================
+
+/**
+ * The public configuration of this deployment.
+ *
+ * The browser needs four things that a build cannot know: the URL the app is
+ * served from, the RPC it reads the chain from, the cluster, and the Dynamic
+ * environment. Baking them into the bundle makes the build and the Worker two
+ * sources of truth for the same fact — and they drift the first time the
+ * domain changes.
+ *
+ * Everything here is public by definition: it reaches the browser either
+ * way. The secrets stay in the environment and never come through here.
+ */
+app.get('/api/config', (_req: Request, res: Response) => {
+  res.json({
+    appUrl: process.env.VITE_PUBLIC_APP_URL ?? process.env.APP_ORIGINS?.split(',')[0] ?? '',
+    rpcUrl: process.env.VITE_SOLANA_RPC || process.env.SOLANA_RPC_URL || '',
+    rpcSubscriptionsUrl: process.env.VITE_SOLANA_RPC_WS || '',
+    cluster: process.env.VITE_SOLANA_CLUSTER ?? 'devnet',
+    dynamicEnvironmentId:
+      process.env.VITE_DYNAMIC_ENVIRONMENT_ID ?? process.env.DYNAMIC_ENVIRONMENT_ID ?? '',
+    realtimeUrl: process.env.VITE_NEON_REALTIME_URL ?? process.env.NEON_REALTIME_URL ?? '',
+    realtimeDb: process.env.VITE_NEON_REALTIME_DB ?? process.env.NEON_REALTIME_DB ?? '',
+  });
+});
+
+// ============================================================================
+// USER PROVISIONING
+// ============================================================================
+
+/**
+ * Create the ledger row for the signed-in user.
+ *
+ * The ledger is keyed by `users.public_key`, and nothing else creates that
+ * row. Without this endpoint a person who signs in with Dynamic has a wallet
+ * but no profile: the app answers "no wallet data is available" and their
+ * payments never appear, because the webhook has no registered wallet to
+ * project the movement onto.
+ *
+ * The address is read from the request body, but it is only ACCEPTED if the
+ * **session** — a signed Dynamic token — controls it: `requireOwnedWallet`
+ * compares it against the addresses the session carries, and the handler
+ * then uses the checked value, not the raw body. The body only carries the
+ * profile the user can change about themselves: name, handle, e-mail, phone,
+ * country, language.
+ *
+ * It is idempotent: the browser calls it on every sign-in, so a second call
+ * refreshes the profile instead of creating a second row.
+ */
+app.post(
+  '/api/users/session',
+  requireSession(sessionVerifier),
+  requireOwnedWallet(walletFromBody),
+  async (req: Request, res: Response) => {
+    const wallet = req.sessionWallet;
+    if (!wallet) {
+      return res.status(400).json({ error: 'wallet is required.' });
+    }
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const text = (value: unknown): string | null =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
+
+    let provisioned;
+    try {
+      provisioned = await provisionUser(wallet, {
+        handle: text(body.handle),
+        name: text(body.name),
+        email: text(body.email),
+        phone: text(body.phone),
+        country: text(body.country),
+        language: text(body.language),
+      });
+    } catch (error) {
+      if (error instanceof ProvisioningError) {
+        // The row could not be created for a reason this server cannot fix.
+        // It is a temporary condition, so it answers 503 and the client
+        // retries. A 500 would read as a bug and send the user nowhere.
+        console.error('[users] the ledger row could not be created', error);
+        return res
+          .status(503)
+          .json({ error: 'No pudimos crear tu perfil todavia. Reintenta en un momento.' });
+      }
+      throw error;
+    }
+
+    res.json({
+      id: provisioned.id,
+      publicKey: provisioned.publicKey,
+      handle: provisioned.handle,
+      created: provisioned.created,
+    });
+  }
+);
+
+// ============================================================================
 // SETTINGS
 // ============================================================================
 
-app.patch('/api/settings/language', async (req, res) => {
+app.patch('/api/settings/language', sessionGate(walletFromBody), writeRateLimit, async (req: Request, res: Response) => {
   // Scoped by the wallet: without it, any caller could rewrite the language
   // of whichever user happens to be first in the table.
   const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : '';
@@ -699,7 +936,7 @@ app.patch('/api/settings/language', async (req, res) => {
  * and verifies ON-CHAIN that the transaction really moved the link's amount
  * to its recipient, before settling that specific link.
  */
-app.post('/api/payment-links/claim', async (req, res) => {
+app.post('/api/payment-links/claim', claimRateLimit, async (req: Request, res: Response) => {
   const { reference, signature } = req.body ?? {};
   if (typeof reference !== 'string' || !reference.trim()) {
     return res.status(400).json({ error: 'reference is required.' });
@@ -712,6 +949,12 @@ app.post('/api/payment-links/claim', async (req, res) => {
   if (!link) return res.status(404).json({ error: 'Enlace no encontrado.' });
   if (link.status !== 'active') {
     return res.status(409).json({ error: 'El enlace ya no está disponible.' });
+  }
+  // An expired link is not payable. The status stays `active` until the
+  // sweeper sweeps it, so the expiry has to be checked here: without it a
+  // payer could settle a charge the merchant had already given up on.
+  if (link.expiresAt && link.expiresAt.getTime() <= Date.now()) {
+    return res.status(409).json({ error: 'El enlace expiró.' });
   }
   if (link.amountUsdc === null) {
     return res.status(409).json({ error: 'El enlace no tiene un monto fijo.' });
@@ -730,9 +973,16 @@ app.post('/api/payment-links/claim', async (req, res) => {
   // with a growing delay — a rate-limited read is NOT the same as a
   // transaction that does not exist, and treating it as one would abandon
   // a perfectly good payment.
-  let verdict: 'confirmed' | 'not-found' | 'mismatch' = 'not-found';
+  //
+  // The budget is a DEADLINE, not a count of attempts. A transaction that is
+  // visible but only `processed` becomes `finalized` in about thirteen
+  // seconds on Solana, so a fixed count of attempts can expire before the
+  // chain has finished saying yes — and a legitimate payment would be
+  // rejected for being early. The attempt count stays as a safety cap.
+  const deadline = Date.now() + CONFIRM_DEADLINE_MS;
+  let verdict: TransferVerdict = 'not-found';
   let transientFailures = 0;
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < CONFIRM_MAX_ATTEMPTS; attempt++) {
     try {
       // The verification is an RPC read, so it goes through the shared pacing
       // gate: the public devnet endpoint answers bursts with 429, and every
@@ -749,8 +999,14 @@ app.post('/api/payment-links/claim', async (req, res) => {
     } catch {
       transientFailures += 1;
     }
-    if (verdict !== 'not-found') break;
-    await new Promise((resolve) => setTimeout(resolve, 500 + attempt * 500));
+    // A transaction that is not visible yet, or that is visible but only
+    // `processed`, can still become a payment. A mismatch cannot: it is
+    // either the wrong recipient, the wrong mint, or the wrong amount.
+    if (verdict === 'confirmed' || verdict === 'mismatch') break;
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(500 + attempt * 500, CONFIRM_BACKOFF_MAX_MS))
+    );
   }
 
   if (verdict === 'not-found' && transientFailures > 0) {
@@ -760,6 +1016,13 @@ app.post('/api/payment-links/claim', async (req, res) => {
   }
 
   if (verdict !== 'confirmed') {
+    if (verdict === 'not-confirmed') {
+      // The money is on its way. Say so, and say it in a way the payer can
+      // act on: this is not a rejection, it is a wait.
+      return res.status(409).json({
+        error: 'La transaccion todavia no esta confirmada. Reintenta en un momento.',
+      });
+    }
     return res.status(verdict === 'not-found' ? 409 : 422).json({
       error:
         verdict === 'not-found'
@@ -891,35 +1154,159 @@ app.post('/api/landing/survey', async (req, res) => {
 });
 
 // ============================================================================
+// ERROR HANDLER
+// ============================================================================
+
+/**
+ * The last word on a failed request.
+ *
+ * Without it, a handler that throws leaves the request hanging: the
+ * connection stays open with no status and no body, and the user waits
+ * until the client gives up. Express 5 forwards a rejected handler to this
+ * middleware, so the failure becomes an answer.
+ *
+ * The log is the point: the client gets a generic message (the details are
+ * not for them) and the operator gets the stack.
+ */
+app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[api] unhandled route error:', error);
+  if (res.headersSent) return;
+  res.status(500).json({ error: 'Unexpected server error.' });
+});
+
+// ============================================================================
 // STATIC (production build)
 // ============================================================================
 
-if (process.env.NODE_ENV === 'production') {
+if (process.env.NODE_ENV === 'production' && !isWorkersRuntime()) {
   const distDir = path.resolve(process.cwd(), 'dist');
   app.use(express.static(distDir));
-  app.get('*', (_req, res) => res.sendFile(path.join(distDir, 'index.html')));
+  // A middleware, not a wildcard route: Express 5 requires a named wildcard
+  // (`/*splat`), and a catch-all middleware reads the same without the
+  // version-specific syntax.
+  app.use((_req, res) => res.sendFile(path.join(distDir, 'index.html')));
 }
 
-app.listen(PORT, HOST, () => {
-  console.log(`\n🚀 ReWallet prototype API listening on http://localhost:${PORT}`);
-  console.log(`   GET  /api/health`);
-  console.log(`   GET  /api/wallet`);
-  console.log(`   GET  /api/wallet/transactions?wallet=<address>`);
-  console.log(`   POST /api/wallet/transactions/pending`);
-  console.log(`   POST /api/webhooks/dynamic`);
-  console.log(`   GET  /api/wallet/contacts`);
-  console.log(`   POST /api/wallet/contacts`);
-  console.log(`   GET  /api/wallet/balances?wallet=<address>&fresh=1`);
-  console.log(`   GET  /api/wallet/notifications?wallet=<address>`);
-  console.log(`   POST /api/wallet/notifications/read`);
-  console.log(`   GET  /api/landing/metrics\n`);
+/**
+ * Should this process open the listening socket?
+ *
+ * `API_NO_LISTEN=1` is the explicit opt-out used by the test suite, which
+ * mounts the app on an ephemeral port of its own. The entry-point check is
+ * the normal path. When the entry point cannot be determined the answer is
+ * *yes*: a server that silently does not start is far worse than one that
+ * starts twice.
+ */
+function shouldListen(): boolean {
+  if (process.env.API_NO_LISTEN === '1') return false;
+  // The Worker entry owns the socket. Opening one here would start a second
+  // server inside the same isolate.
+  if (isWorkersRuntime()) return false;
 
-  startHistorySweeper();
+  const entry = process.argv[1];
+  if (!entry) return true;
 
-  // Warm the database pool in the background: the first user request should
-  // not pay for the TCP + TLS handshake to Neon.
-  void warmPool();
-});
+  try {
+    return import.meta.url === pathToFileURL(path.resolve(entry)).href;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Start the HTTP listener.
+ *
+ * The app is exported so a test can mount it on an ephemeral port and
+ * exercise the real routes — including the ones that must answer 401
+ * before they touch the database.
+ */
+export function startServer(): void {
+  app.listen(PORT, HOST, () => {
+    console.log(`\n🚀 ReWallet prototype API listening on http://localhost:${PORT}`);
+    console.log(`   GET  /api/health`);
+    console.log(`   GET  /api/wallet`);
+    console.log(`   GET  /api/wallet/transactions?wallet=<address>`);
+    console.log(`   POST /api/wallet/transactions/pending`);
+    console.log(`   POST /api/webhooks/dynamic`);
+    console.log(`   GET  /api/wallet/contacts`);
+    console.log(`   POST /api/wallet/contacts`);
+    console.log(`   GET  /api/wallet/balances?wallet=<address>&fresh=1`);
+    console.log(`   GET  /api/wallet/notifications?wallet=<address>`);
+    console.log(`   POST /api/wallet/notifications/read`);
+    console.log(`   GET  /api/landing/metrics\n`);
+
+    startHistorySweeper();
+
+    // Warm the database pool in the background: the first user request should
+    // not pay for the TCP + TLS handshake to Neon.
+    void warmPool();
+  });
+}
+
+if (shouldListen()) {
+  startServer();
+}
+
+export { app };
+
+/**
+ * One reconciliation pass over every registered wallet.
+ *
+ * It lives outside the timer because the Worker has no timer: there, the
+ * Cron Trigger calls this function directly. Same work, same order, two
+ * schedulers.
+ */
+export interface SweepOutcome {
+  /** The RPC answered 429: the chain is saturated, so the pass is partial. */
+  rateLimited: boolean;
+  /** The wallets whose ledger rows changed. */
+  changed: number;
+  /** The wallets the pass looked at. */
+  total: number;
+  /** The payment links whose `expiresAt` has passed. */
+  expired: number;
+  /** The delivery-log rows the pass pruned. */
+  pruned: number;
+}
+
+export async function runHistorySweep(): Promise<SweepOutcome> {
+  // The delivery log is the webhook's idempotency ledger. The sweeper has
+  // already reconciled the chain, so the entries older than a month are
+  // history — and without this the table grows with every delivery Dynamic
+  // ever sends.
+  const pruned = await pruneWebhookDeliveries(30);
+  if (pruned > 0) {
+    console.log(`[sweeper] pruned ${pruned} old webhook deliveries`);
+  }
+
+  const { results, rateLimited } = await syncAllWallets(500);
+
+  if (rateLimited) {
+    return { rateLimited: true, changed: 0, total: results.length, expired: 0, pruned };
+  }
+
+  const changed = results.filter((r) => r.inserted + r.updated > 0);
+  if (changed.length > 0) {
+    console.log(
+      `[sweeper] ${changed.length}/${results.length} wallet(s) updated: ` +
+        changed
+          .map((r) => `${r.publicKey.slice(0, 8)}… (+${r.inserted}/~${r.updated})`)
+          .join(', ')
+    );
+  }
+
+  // Expire payment links whose `expiresAt` has passed.
+  const expired = await expireStalePaymentLinks();
+  if (expired > 0) console.log(`[sweeper] ${expired} payment links expirados`);
+
+  return {
+    rateLimited: false,
+    changed: changed.length,
+    total: results.length,
+    expired,
+    pruned,
+  };
+}
+
 
 /**
  * Periodic RPC sweep over every registered wallet.
@@ -964,9 +1351,9 @@ function startHistorySweeper(): void {
 
     void (async () => {
       try {
-        const { results, rateLimited } = await syncAllWallets(500);
+        const outcome = await runHistorySweep();
 
-        if (rateLimited) {
+        if (outcome.rateLimited) {
           noteRateLimit();
           currentDelayMs = Math.min(currentDelayMs * 2, maxBackoffMs);
           console.warn(
@@ -978,18 +1365,6 @@ function startHistorySweeper(): void {
             currentDelayMs = baseIntervalMs;
             console.log(`[sweeper] RPC healthy again; cadence back to ${baseIntervalMs / 1000}s`);
           }
-          const changed = results.filter((r) => r.inserted + r.updated > 0);
-          if (changed.length > 0) {
-            console.log(
-              `[sweeper] ${changed.length}/${results.length} wallet(s) updated: ` +
-                changed
-                  .map((r) => `${r.publicKey.slice(0, 8)}… (+${r.inserted}/~${r.updated})`)
-                  .join(', ')
-            );
-          }
-          // Expire payment links whose `expiresAt` has passed.
-          const expired = await expireStalePaymentLinks();
-          if (expired > 0) console.log(`[sweeper] ${expired} payment links expirados`);
         }
       } catch (error) {
         console.error(

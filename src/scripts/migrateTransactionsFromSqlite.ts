@@ -10,7 +10,8 @@
  */
 
 import Database from 'better-sqlite3';
-import { pool, db } from '../db';
+import { db } from '../db';
+import { pool } from '../db/nodePool';
 import { transactions } from '../db/schema';
 
 const SQLITE_PATH = 'data/rewallet.db';

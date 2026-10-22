@@ -5,9 +5,11 @@
  * working on-chain data alone when the local server is not running.
  */
 
+import { runtimeConfig } from '../config/runtime';
 import type { Transaction } from '../types/wallet';
 import type { SealedLiveQuery } from '@neon/realtime/client';
 import type { LiveTransactionRow } from './transactionMapper';
+import { getDynamicClient } from '../dynamicClient';
 
 /**
  * Base URL for API calls.
@@ -33,11 +35,51 @@ export interface RecentRecipient {
   lastSentAt: number | null;
 }
 
+/**
+ * The session credential, when there is one.
+ *
+ * Dynamic signs the session and the server verifies that signature, so the
+ * wallet the API acts on comes from a signed claim instead of a parameter
+ * the caller chose. The token is `client.token` — a plain getter, not a
+ * hook — so it is read at call time: the value changes when the user signs
+ * in or out, and a captured value would go stale.
+ */
+let warnedAboutMissingClient = false;
+
+function sessionToken(): string | null {
+  try {
+    const token = getDynamicClient().token;
+    return typeof token === 'string' && token.length > 0 ? token : null;
+  } catch (error) {
+    // No Dynamic client yet: no environment id, or the SDK has not been
+    // created. The request still goes out — a user-scoped route answers 401
+    // and a public route answers normally — but a silent 401 loop is
+    // impossible to diagnose, so the failure is reported once.
+    //
+    // Once per process, like the server-side misconfiguration warnings: a
+    // long-lived process says it one time, and a serverless isolate says it
+    // one time per isolate, which is the right granularity there.
+    if (!warnedAboutMissingClient) {
+      warnedAboutMissingClient = true;
+      console.warn(
+        '[api] the Dynamic client is not available; user-scoped requests will answer 401.',
+        error
+      );
+    }
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = sessionToken();
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init?.headers,
+    },
   });
   if (!response.ok) {
     throw new Error(`${path} responded ${response.status}`);
@@ -114,17 +156,60 @@ export async function fetchWalletBalances(
   }
 }
 
-/** Wire shape of the public identity lookup for a Solana address. */
+/**
+ * The profile the browser hands over when it provisions the ledger row.
+ *
+ * The wallet is the only field the server cannot verify for itself — and it
+ * does not take it on trust: the server takes the address from the signed
+ * session and only uses the body for the profile the user owns.
+ */
+export interface SessionProfilePayload {
+  wallet: string;
+  handle?: string | null;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  country?: string | null;
+  language?: string | null;
+}
+
+/**
+ * Make sure the ledger has a row for the signed-in user.
+ *
+ * The row is the user's identity in the ledger, and nothing else creates it.
+ * Without this the app works for the two seeded accounts and for nobody
+ * else. The call is idempotent: it runs on every sign-in and refreshes the
+ * profile in place.
+ */
+export async function provisionSessionUser(
+  profile: SessionProfilePayload
+): Promise<{ id: number; handle: string; created: boolean }> {
+  return await request<{ id: number; handle: string; created: boolean }>(
+    '/api/users/session',
+    {
+      method: 'POST',
+      body: JSON.stringify(profile),
+    }
+  );
+}
+
+/**
+ * Wire shape of the public identity lookup for a Solana address.
+ *
+ * The display handle only. The account e-mail used to be part of this
+ * payload, and a public route keyed by an on-chain address is a directory
+ * scraper rather than a lookup: every pubkey is public, so publishing the
+ * e-mail behind it would have handed out the user directory.
+ */
 export interface WalletIdentity {
-  email: string | null;
   handle: string | null;
 }
 
 /**
- * Registered email/handle for a wallet address (used by the payment page so
- * the payer sees "Pagar a {email}" instead of a raw pubkey). Returns null for
- * unknown addresses, offline API, or invalid input — the caller falls back to
- * a shortened address.
+ * Registered handle for a wallet address (used by the payment page so the
+ * payer sees "Pagar a {handle}" instead of a raw pubkey). Returns null for
+ * unknown addresses, offline API, or invalid input — the caller falls back
+ * to a shortened address.
  */
 export async function fetchWalletIdentity(
   address: string
@@ -422,6 +507,12 @@ export function resolveAppHomeUrl(): string {
   const host = window.location.hostname;
   const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
 
+  // The deployment knows its own public origin. The browser's own origin is
+  // the same thing in a normal deployment, but the configured value is the
+  // one the payment links are built from, so it wins.
+  const deployed = runtimeConfig().appUrl?.trim();
+  if (deployed && !isLocal) return deployed.replace(/\/$/, '');
+
   if (!isLocal) return window.location.origin;
 
   const configured = import.meta.env.VITE_PUBLIC_APP_URL?.trim();
@@ -442,6 +533,11 @@ export function resolveAppHomeUrl(): string {
 export async function fetchPublicAppUrl(): Promise<string | null> {
   const host = window.location.hostname;
   const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+
+  // The deployment's own origin, when it reported one.
+  const deployed = runtimeConfig().appUrl?.trim();
+  if (deployed && !isLocal) return deployed.replace(/\/$/, '');
+
   if (!isLocal) return window.location.origin;
   try {
     const data = await request<{ url: string | null }>('/api/tunnel');

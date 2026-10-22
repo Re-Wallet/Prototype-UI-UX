@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { and, desc, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
-import { db, pool } from '../db';
+import { db } from '../db';
 import { paymentLinks, users } from '../db/schema';
 import { generateReference } from '../adapters/solana-pay';
 import { cacheKey, invalidate, invalidatePrefix } from './readCache';
@@ -223,30 +223,6 @@ export async function trySettlePaymentLink(
 }
 
 /**
- * Mark a payment link as paid. Idempotent: only transitions from `active`
- * or `partial` to `paid`; a link already `paid` is returned unchanged.
- *
- * Called by the settle endpoint after on-chain verification confirms the
- * payment, and by the sweeper as a backstop when it observes the
- * reference in a transaction's account keys.
- */
-export async function markPaymentLinkPaid(
-  reference: string,
-  settlement: {
-    paidAmountUsdc: number;
-    paidByPubkey: string;
-    paidTxId: number | null;
-    paidTxSignature?: string | null;
-  }
-): Promise<PaymentLink | null> {
-  const settled = await trySettlePaymentLink(reference, settlement);
-  if (settled) return settled;
-
-  // Already paid or not found — return current state.
-  return getPaymentLinkByReference(reference);
-}
-
-/**
  * List a user's payment links, newest first.
  */
 export async function listPaymentLinks(userId: number, limit = 20): Promise<PaymentLink[]> {
@@ -296,14 +272,14 @@ export function livePaymentLinksQuery(userId: number, limit = 20) {
  * Expire links whose `expiresAt` has passed. Called by the sweeper.
  */
 export async function expireStalePaymentLinks(): Promise<number> {
-  const { rows } = await pool.query(
-    `UPDATE payment_links SET status = 'expired', updated_at = now()
+  const expired = await db.execute(sql`
+    UPDATE payment_links SET status = 'expired', updated_at = now()
      WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at < now()
-     RETURNING id`
-  );
+    RETURNING id
+  `);
   // The sweep spans every user, so the whole family of link lists is stale.
-  if (rows.length > 0) invalidatePrefix('payment-links:');
-  return rows.length;
+  if (expired.rows.length > 0) invalidatePrefix('payment-links:');
+  return expired.rows.length;
 }
 
 /**

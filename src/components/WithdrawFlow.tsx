@@ -6,7 +6,12 @@ import { Keypad } from './Keypad';
 import { CoinIcon } from './CoinIcon';
 import { QrScannerFlow } from './QrScannerFlow';
 import { getDynamicClient } from '../dynamicClient';
-import { assetBySymbol, chain, type Address } from '../adapters';
+import {
+  assetBySymbol,
+  chain,
+  type Address,
+} from '../adapters';
+import { ensureDynamicNetwork } from '../adapters/dynamic-network';
 import {
   fetchRecentRecipients,
   peekRecentRecipients,
@@ -145,7 +150,7 @@ export const WithdrawFlow: React.FC<WithdrawFlowProps> = ({
     try {
       // Confirm Dynamic signs against the same cluster the app is configured
       // for. See adapters/dynamic-network.ts for why this is not automatic.
-      const alignment = await chain.ensureDynamicNetwork(solanaWallet);
+      const alignment = await ensureDynamicNetwork(solanaWallet);
       if (!alignment.ok) {
         throw new Error(
           alignment.alignment.reason ??

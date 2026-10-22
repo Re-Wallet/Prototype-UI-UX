@@ -1,3 +1,4 @@
+import { runtimeConfig } from '../config/runtime';
 /**
  * Solana RPC client — the only place a connection is created.
  *
@@ -55,7 +56,10 @@ function envValue(key: string): string | undefined {
  * validator, or a proxy).
  */
 export function resolveNetworkConfig(): SolanaNetworkConfig {
-  const clusterRaw = envValue('VITE_SOLANA_CLUSTER');
+  // The deployment's values win over the build's: the Worker knows its own
+  // URL and its own RPC, and the bundle was built before either was known.
+  const runtime = runtimeConfig();
+  const clusterRaw = runtime.cluster ?? envValue('VITE_SOLANA_CLUSTER');
   const cluster: SupportedCluster =
     clusterRaw === 'mainnet-beta' ? 'mainnet-beta' : 'devnet';
 
@@ -63,8 +67,9 @@ export function resolveNetworkConfig(): SolanaNetworkConfig {
 
   return {
     cluster,
-    rpcUrl: envValue('VITE_SOLANA_RPC') ?? base.rpcUrl,
-    rpcSubscriptionsUrl: envValue('VITE_SOLANA_RPC_WS') ?? base.rpcSubscriptionsUrl,
+    rpcUrl: runtime.rpcUrl || envValue('VITE_SOLANA_RPC') || base.rpcUrl,
+    rpcSubscriptionsUrl:
+      runtime.rpcSubscriptionsUrl || envValue('VITE_SOLANA_RPC_WS') || base.rpcSubscriptionsUrl,
   };
 }
 
