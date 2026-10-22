@@ -56,7 +56,7 @@
     "APP_ORIGINS": "https://rewallet.win,https://rewallet.consulta-tteriolavayen.workers.dev",
     "DYNAMIC_ENVIRONMENT_ID": "d074df47-deb9-4d73-9214-458da288014c",
     "NEON_REALTIME_DB": "neondb",
-    "VITE_PUBLIC_APP_URL": "https://rewallet.consulta-tteriolavayen.workers.dev",
+    "VITE_PUBLIC_APP_URL": "https://rewallet.win",
     "VITE_DYNAMIC_ENVIRONMENT_ID": "d074df47-deb9-4d73-9214-458da288014c",
     "SOLANA_RPC_URL": "https://api.devnet.solana.com",
     "NEON_REALTIME_URL": "wss://br-delicate-frog-b4hdj8ws-neonrealtimesocket.compute.c-6.us-east-2.aws.neon.tech/"
